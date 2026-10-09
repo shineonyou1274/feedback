@@ -12,7 +12,7 @@
   var cur = null;            // 편집 중인 항목
   var dirty = false;
   var CFG = null;            // 과제 설정
-  var STATUS_CLASS = { '미작성': 's-new', 'AI 초안': 's-draft', '확정': 's-done', 'PDF 완료': 's-pdf' };
+  var STATUS_CLASS = { '미작성': 's-new', '작성됨': 's-written', '공개': 's-pub' };
 
   function store(fn) { try { return fn(); } catch (e) { return null; } }
   function esc(s) {
@@ -112,7 +112,7 @@
       }).join('');
       fs.value = keep;
       var st = $('fStatus'), keep2 = st.value;
-      st.innerHTML = '<option value="">모든 상태</option><option value="__unpub">공개 전 (PDF 완료)</option>' +
+      st.innerHTML = '<option value="">모든 상태</option>' +
         d.statuses.map(function (s) { return '<option>' + esc(s) + '</option>'; }).join('');
       st.value = keep2;
       $('btnDraftPending').disabled = !d.hasApiKey;
@@ -128,7 +128,7 @@
     $('tiles').innerHTML = DASH.stages.map(function (s) {
       var rows = latestOnly(DASH.rows.filter(function (r) { return r.stageId === s.id; }));
       var todo = rows.filter(function (r) { return r.status === '미작성' || r.status === 'AI 초안'; }).length;
-      var vis = rows.filter(function (r) { return r.visible; }).length;
+      var vis = rows.filter(function (r) { return r.published; }).length;
       return '<button type="button" class="tile' + (stage === s.id ? ' on' : '') + '" data-stage="' + esc(s.id) + '">' +
         '<div class="nm">' + esc(s.name) + (s.open ? '' : ' <small>(닫힘)</small>') + '</div>' +
         '<div class="big">' + rows.length + (DASH.rosterCount ? '<small> / ' + DASH.rosterCount + '명</small>' : '명') + '</div>' +
@@ -159,15 +159,13 @@
     if ($('fLatest').checked) rows = latestOnly(rows);
     view = rows.filter(function (r) {
       if (stage && r.stageId !== stage) return false;
-      if (status === '__unpub') { if (!(r.hasPdf && !r.published)) return false; }
-      else if (status && r.status !== status) return false;
+      if (status && r.status !== status) return false;
       if (q && (r.id + ' ' + r.name).indexOf(q) < 0) return false;
       return true;
     });
     var tb = $('listTable').querySelector('tbody');
     tb.innerHTML = view.map(function (r) {
-      var vis = r.visible ? '<span class="vis-on">보임</span>'
-        : r.published ? '<span class="vis-wait">' + esc(r.releaseDate) + ' 예약</span>' : '-';
+      var vis = r.published ? '<span class="vis-on">✅ 공개</span>' : '-';
       return '<tr data-r="' + esc(r.receipt) + '"' + (selected.has(r.receipt) ? ' class="sel"' : '') + '>' +
         '<td><input type="checkbox" class="pick"' + (selected.has(r.receipt) ? ' checked' : '') + ' aria-label="고르기"></td>' +
         '<td>' + esc(r.id) + '</td><td><b>' + esc(r.name) + '</b></td><td>' + esc(r.stageName) + '</td>' +
@@ -222,41 +220,18 @@
     var ids = Array.from(selected);
     if (!ids.length) { toast('먼저 학생을 고르세요.'); return; }
     if (kind === 'draft') return bulkDraft(ids);
-    if (kind === 'confirm') {
-      loading(true, '확정하는 중…');
-      return admin('adminSetStatus', ids, '확정').then(function (r) { toast(r.count + '건을 확정했습니다.'); afterBulk(); }).catch(fail);
-    }
-    if (kind === 'pdf') return runPdf(ids);
-    if (kind === 'publish') {
-      var d = $('bulkDate').value;
-      loading(true, '공개하는 중…');
-      return admin('adminPublish', ids, true, d).then(function (r) {
-        toast(r.count + '건을 ' + (d ? d + '부터 ' : '지금 ') + '공개합니다.' + (r.noPdf.length ? '\nPDF가 없어 건너뜀: ' + r.noPdf.join(', ') : ''));
+    if (kind === 'publish' || kind === 'unpublish') {
+      var on = kind === 'publish';
+      loading(true, on ? '공개하는 중…' : '공개를 거두는 중…');
+      return admin('adminPublish', ids, on).then(function (r) {
+        toast(on
+          ? r.count + '명을 공개했습니다.' + (r.mailed ? ' 도착 메일 ' + r.mailed + '통.' : '') + (r.empty.length ? '\n의견이 비어 건너뜀: ' + r.empty.join(', ') : '')
+          : r.count + '명의 공개를 거두었습니다.');
         afterBulk();
       }).catch(fail);
     }
-    if (kind === 'unpublish') {
-      loading(true, '공개를 거두는 중…');
-      return admin('adminPublish', ids, false).then(function (r) { toast(r.count + '건의 공개를 거두었습니다.'); afterBulk(); }).catch(fail);
-    }
   }
   function afterBulk() { selected.clear(); loadDashboard(); }
-
-  function runPdf(ids, done) {
-    loading(true, 'PDF를 만드는 중… (' + ids.length + '건)');
-    return admin('adminMakePdfs', ids).then(function (r) {
-      var msg = 'PDF ' + r.done + '건을 만들었습니다.';
-      if (r.skipped.length) msg += '\n건너뜀: ' + r.skipped.join(', ');
-      if (r.errors.length) msg += '\n실패: ' + r.errors.join(' / ');
-      if (r.left > 0) {
-        toast(msg + '\n남은 ' + r.left + '건을 이어서 만듭니다.');
-        return runPdf(r.leftReceipts, done);
-      }
-      toast(msg);
-      if (done) return done();
-      afterBulk();
-    }).catch(fail);
-  }
 
   function bulkDraft(ids) {
     var i = 0, ok = 0, errs = [];
@@ -273,13 +248,13 @@
       admin('adminAiDraft', rc).then(function () { ok++; next(); })
         .catch(function (e) { errs.push((row.name || rc) + ': ' + e.message); next(); });
     }
-    if (ids.some(function (rc) { var r = DASH.rows.find(function (x) { return x.receipt === rc; }); return r && (r.status === '확정' || r.status === 'PDF 완료'); }) &&
-        !confirm('확정했거나 PDF를 만든 학생도 있습니다. AI 초안으로 덮어쓸까요?')) return;
+    if (ids.some(function (rc) { var r = DASH.rows.find(function (x) { return x.receipt === rc; }); return r && r.status !== '미작성'; }) &&
+        !confirm('이미 의견이 적힌 학생도 있습니다. AI 초안으로 덮어쓸까요?')) return;
     next();
   }
 
   $('btnDraftPending').addEventListener('click', function () {
-    if (!confirm('미작성 제출 전체에 AI 초안을 만듭니다. 한 건에 1분 안팎이 걸릴 수 있습니다. 시작할까요?')) return;
+    if (!confirm('아직 안 쓴 피드백 전체를 AI로 만듭니다. 한 건에 1분 안팎이 걸릴 수 있습니다. 시작할까요?')) return;
     var total = 0;
     (function round() {
       loading(true, 'AI 초안 만드는 중… (지금까지 ' + total + '건)');
@@ -292,15 +267,6 @@
         loadDashboard();
       }).catch(fail);
     })();
-  });
-
-  $('btnMail').addEventListener('click', function () {
-    loading(true, '도착 메일을 보내는 중…');
-    admin('adminSendArrivalMails').then(function (r) {
-      loading(false);
-      toast(r.reason ? '보내지 않았습니다: ' + r.reason : '도착 메일 ' + r.sent + '통을 보냈습니다.' + (r.skipped ? ' (이메일 없음·실패 ' + r.skipped + '명)' : ''));
-      loadDashboard();
-    }).catch(fail);
   });
 
   // ───────── 피드백 작성 ─────────
@@ -371,15 +337,10 @@
     $('edImprovements').value = it.improvements;
     $('edNext').value = it.nextSteps;
     $('edSummary').value = it.summary;
-    $('edStatus').innerHTML = (DASH ? DASH.statuses : ['미작성', 'AI 초안', '확정', 'PDF 완료']).map(function (s) {
-      return '<option' + (s === it.status ? ' selected' : '') + '>' + esc(s) + '</option>';
-    }).join('');
-    $('edRelease').value = it.releaseDate;
     $('edPublished').checked = it.published;
-    $('btnPdfView').hidden = !it.pdfUrl;
     $('edMeta').textContent = [
       it.aiTime ? 'AI 초안 ' + it.aiTime : '',
-      it.pdfTime ? 'PDF ' + it.pdfTime : '',
+      it.publishedAt && it.published ? '공개 ' + it.publishedAt : '',
       it.arrivalMailed ? '도착 메일 ' + it.arrivalMailed : '',
     ].filter(String).join(' · ');
     $('edErr').textContent = '';
@@ -399,12 +360,12 @@
     return !bad;
   }
 
-  ['edStrengths', 'edImprovements', 'edNext', 'edSummary', 'edStatus', 'edRelease', 'edPublished'].forEach(function (id) {
+  ['edStrengths', 'edImprovements', 'edNext', 'edSummary', 'edPublished'].forEach(function (id) {
     $(id).addEventListener('input', function () { dirty = true; });
     $(id).addEventListener('change', function () { dirty = true; });
   });
 
-  function collectFeedback(status) {
+  function collectFeedback(publish) {
     var scores = {};
     $('edScores').querySelectorAll('input').forEach(function (inp) {
       scores[cur.scores[Number(inp.dataset.i)].item] = inp.value === '' ? '' : Number(inp.value);
@@ -415,21 +376,19 @@
       improvements: $('edImprovements').value,
       nextSteps: $('edNext').value,
       summary: $('edSummary').value,
-      status: status || $('edStatus').value,
-      releaseDate: $('edRelease').value,
-      published: $('edPublished').checked,
+      published: publish === undefined ? $('edPublished').checked : publish,
     };
   }
 
-  function save(status) {
+  function save(publish) {
     if (!calcTotal()) { $('edErr').textContent = '점수는 0부터 배점 사이로 넣으세요.'; return Promise.reject(new Error('점수 범위')); }
     $('edErr').textContent = '';
     loading(true, '저장하는 중…');
-    return admin('adminSaveFeedback', cur.receipt, collectFeedback(status)).then(function (it) {
+    return admin('adminSaveFeedback', cur.receipt, collectFeedback(publish)).then(function (it) {
       loading(false);
       renderItem(it);
       syncRow(it);
-      toast('저장했습니다.' + (it.status === '확정' && cur.pdfTime ? ' 내용이 바뀌었으면 PDF를 다시 만드세요.' : ''));
+      toast(it.published ? '저장했습니다. 학생 화면에 보입니다.' + (it.arrivalMailed ? ' (도착 메일 보냄)' : '') : '저장했습니다. (아직 학생에게는 안 보입니다)');
       return it;
     }).catch(function (e) { loading(false); $('edErr').textContent = e.message; throw e; });
   }
@@ -439,34 +398,25 @@
     if (!DASH) return;
     var r = DASH.rows.find(function (x) { return x.receipt === it.receipt; });
     if (!r) return;
-    r.status = it.status; r.total = it.total; r.published = it.published; r.releaseDate = it.releaseDate; r.hasPdf = !!it.pdfUrl;
-    r.visible = r.published && r.hasPdf && (!r.releaseDate || new Date(r.releaseDate + 'T00:00:00') <= new Date());
+    r.status = it.status; r.total = it.total; r.published = it.published;
   }
 
   $('fbForm').addEventListener('submit', function (e) { e.preventDefault(); save().catch(function () {}); });
-  $('btnSaveConfirm').addEventListener('click', function () {
-    var next = $('edStatus').value === 'PDF 완료' && !dirty ? 'PDF 완료' : '확정';
-    save(next).catch(function () {});
-  });
+  $('btnSavePublish').addEventListener('click', function () { save(true).catch(function () {}); });
   $('btnAi').addEventListener('click', function () {
     if ((cur.strengths || cur.improvements) && !confirm('지금 의견과 점수를 AI 초안으로 바꿉니다. 계속할까요?')) return;
     loading(true, 'AI가 제출물과 과정 기록을 읽는 중… (1분 안팎)');
     admin('adminAiDraft', cur.receipt).then(function (it) {
-      loading(false); renderItem(it); syncRow(it); toast('AI 초안을 채웠습니다. 읽고 고친 뒤 확정하세요.');
+      loading(false); renderItem(it); syncRow(it); toast('AI 초안을 채웠습니다. 읽고 고친 뒤 "저장하고 공개"를 누르세요.');
     }).catch(fail);
   });
-  $('btnPdf').addEventListener('click', function () {
-    var go = function () {
-      runPdf([cur.receipt], function () {
-        return admin('adminGetItem', cur.receipt).then(function (it) { loading(false); renderItem(it); syncRow(it); });
-      });
-    };
-    if (dirty) save('확정').then(go).catch(function () {}); else go();
-  });
   $('btnPdfView').addEventListener('click', function () {
-    loading(true, 'PDF를 여는 중…');
-    admin('adminFeedbackPdf', cur.receipt).then(function (f) { return PdfView.open(f, cur.name + ' · ' + cur.stageName + ' 피드백'); })
-      .then(function () { loading(false); }).catch(fail);
+    var go = function () {
+      loading(true, 'PDF를 만드는 중…');
+      admin('adminFeedbackPdf', cur.receipt).then(function (f) { return PdfView.open(f, cur.name + ' · ' + cur.stageName + ' 피드백'); })
+        .then(function () { loading(false); }).catch(fail);
+    };
+    if (dirty) save().then(go).catch(function () {}); else go();
   });
   function step(d) {
     var idx = view.findIndex(function (r) { return r.receipt === cur.receipt; });
@@ -625,7 +575,6 @@
   function renderTools() {
     $('rosterText').value = CFG.roster.map(function (r) { return [r.id, r.name, r.email].filter(String).join(' '); }).join('\n');
     $('rosterInfo').textContent = '지금 ' + CFG.roster.length + '명';
-    $('dailyToggle').checked = CFG.dailyTrigger;
     $('apiInfo').textContent = CFG.hasApiKey
       ? 'API 키가 저장되어 있습니다. 바꾸려면 새 키를 넣으세요.'
       : 'API 키가 없습니다. console.anthropic.com에서 발급한 키를 넣으면 AI 초안을 쓸 수 있습니다.';
@@ -639,11 +588,6 @@
     admin('adminSaveRoster', $('rosterText').value).then(function (r) {
       CFG.roster = r.roster; renderTools(); loading(false); toast('명단 ' + r.count + '명을 저장했습니다.'); loadDashboard();
     }).catch(fail);
-  });
-  $('dailyToggle').addEventListener('change', function (e) {
-    admin('adminToggleDailyTrigger', e.target.checked).then(function (on) {
-      CFG.dailyTrigger = on; toast(on ? '매일 아침 도착 메일을 보냅니다.' : '자동 발송을 껐습니다.');
-    }).catch(function (err) { e.target.checked = !e.target.checked; fail(err); });
   });
   $('btnApiKey').addEventListener('click', function () {
     var k = $('apiKey').value.trim();

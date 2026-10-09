@@ -1,6 +1,6 @@
 /**
  * AI 초안: 제출물과 '과정 기록'을 읽고 루브릭 기준 예상 점수와 단계별 피드백 초안을 만든다.
- * 교사가 시트에서 읽고 고친 뒤 '확정'한다. AI 초안을 그대로 학생에게 보내지 않는다.
+ * 교사가 읽고 고친 뒤 '공개'를 체크해야 학생에게 보인다.
  */
 
 const CLAUDE_URL = 'https://api.anthropic.com/v1/messages';
@@ -145,7 +145,7 @@ function fileBlocks_(fileId) {
   return [{ type: 'text', text: `(제출 파일 ${name}은(는) AI가 읽을 수 없는 형식입니다. 한글 파일은 PDF로 내도록 안내하세요. 학생 메모와 본문만으로 판단하세요.)` }];
 }
 
-/** 같은 학생의 이전 단계 피드백(확정 이상)을 모아 성장 맥락으로 쓴다. */
+/** 같은 학생의 이전 단계 피드백(의견이 적힌 것)을 모아 성장 맥락으로 쓴다. */
 function previousFeedback_(fbRows, row) {
   const stages = getStages_();
   const order = {};
@@ -153,7 +153,7 @@ function previousFeedback_(fbRows, row) {
   const cur = order[row['단계ID']];
   return fbRows
     .filter(r => normId_(r['학번']) === normId_(row['학번']) && r['접수번호'] !== row['접수번호'])
-    .filter(r => order[r['단계ID']] < cur && (r['상태'] === STATUS.DONE || r['상태'] === STATUS.PDF))
+    .filter(r => order[r['단계ID']] < cur && hasContent_(r))
     .sort((a, b) => order[a['단계ID']] - order[b['단계ID']]);
 }
 
@@ -187,7 +187,6 @@ function draftRow_(fbSh, fbMap, row, ctx) {
     '보완할 점': out.improvements,
     '다음 단계까지 할 일': out.nextSteps,
     '한 줄 총평': out.summary,
-    '상태': STATUS.DRAFT,
     'AI 초안시각': new Date(),
   };
   let total = 0;
@@ -226,6 +225,7 @@ function aiContext_() {
  * '피드백' 시트뿐 아니라 '제출' 시트에서 학생 행을 골라도 된다 (접수번호로 찾아 준다).
  */
 function selectedFeedbackRows_() {
+  ensureTriggers_();
   repairFeedbackSheet_(); // 빠진 피드백 행부터 채운다.
   const sh = SpreadsheetApp.getActiveSheet();
   const name = sh.getName();
@@ -252,9 +252,9 @@ function menuDraftSelected() {
   let targets = selectedFeedbackRows_();
   const locked = targets.filter(r => {
     const st = ctx.fbRows.find(x => x._row === r);
-    return st && (st['상태'] === STATUS.DONE || st['상태'] === STATUS.PDF);
+    return st && hasContent_(st);
   });
-  if (locked.length && ui.alert(`확정했거나 PDF를 만든 행이 ${locked.length}개 있습니다. 그 행도 AI 초안으로 덮어쓸까요?`, ui.ButtonSet.YES_NO) !== ui.Button.YES) {
+  if (locked.length && ui.alert(`이미 의견이 적힌 학생이 ${locked.length}명 있습니다. 그 학생도 AI 초안으로 덮어쓸까요?`, ui.ButtonSet.YES_NO) !== ui.Button.YES) {
     targets = targets.filter(r => locked.indexOf(r) < 0);
   }
   alertDraftResult_(makeDrafts_(targets, ctx, true));
@@ -267,7 +267,7 @@ function menuDraftAll() {
 
 function pendingDraftRows_() {
   return readRows_(sheet_(SHEET.FEEDBACK))
-    .filter(r => r['접수번호'] && (r['상태'] === STATUS.NEW || r['상태'] === ''))
+    .filter(r => r['접수번호'] && !hasContent_(r))
     .map(r => r._row);
 }
 
@@ -302,5 +302,5 @@ function alertDraftResult_(r) {
     `AI 초안 ${r.done}건을 만들었습니다.` +
     (r.left > 0 ? `\n실행 시간 제한 때문에 ${r.left}건이 남았습니다. 같은 메뉴를 한 번 더 실행하세요.` : '') +
     (r.errors.length ? `\n\n실패:\n${r.errors.join('\n')}` : '') +
-    '\n\n초안을 읽고 고친 뒤 "확정 표시"를 하세요. 점수 근거는 "예상 합계" 칸의 메모에 있습니다.');
+    '\n\n읽고 고친 뒤 "공개" 칸을 체크하면 학생에게 보이고 메일이 갑니다. 점수 근거는 "예상 합계" 칸 메모에 있습니다.');
 }

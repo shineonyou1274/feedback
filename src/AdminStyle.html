@@ -29,6 +29,8 @@
   .chk { display: inline-flex; gap: 6px; align-items: center; font-weight: 500; font-size: 14px; margin: 0; }
   .chk input { width: auto; margin: 0; }
   .big-chk { font-size: 15px; margin-top: 26px; }
+  .publish-chk { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 18px; padding: 10px 12px; background: #e9f7ee; border: 2px solid var(--ok); border-radius: 12px; }
+  .publish-chk .small-text { margin: 0; }
 
   .bulk { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 14px 0 8px; padding: 10px; background: var(--yellow-soft); border: 2px solid var(--ink); border-radius: 14px; }
   .bulk .btn.small { font-size: 14px; padding: 5px 12px; box-shadow: 2px 2px 0 var(--ink); }
@@ -44,9 +46,8 @@
   table.list tbody tr.sel { background: #e8efff; }
   .chip { display: inline-block; padding: 2px 10px; border-radius: 999px; border: 2px solid var(--ink); font-size: 12px; font-weight: 700; white-space: nowrap; }
   .chip.s-new { background: #eee; }
-  .chip.s-draft { background: #ffe9a8; }
-  .chip.s-done { background: #cfe0ff; }
-  .chip.s-pdf { background: var(--denim); color: #fff; }
+  .chip.s-written { background: #ffe9a8; }
+  .chip.s-pub { background: var(--ok); color: #fff; }
   .vis-on { color: var(--ok); font-weight: 700; }
   .vis-wait { color: #a66b00; font-weight: 700; }
   .tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; background: #ffd6d6; margin-left: 4px; }

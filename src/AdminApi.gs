@@ -87,13 +87,12 @@ function adminDashboard(token) {
   if (lock.tryLock(10000)) {
     try { repairFeedbackSheet_(); } finally { lock.releaseLock(); }
   }
+  ensureTriggers_();
   const stages = getStages_();
   const rubric = getRubric_();
   const maxTotal = rubric.reduce((a, r) => a + r.max, 0);
   const subByReceipt = {};
   readRows_(sheet_(SHEET.SUBMIT)).forEach(r => { subByReceipt[r['접수번호']] = r; });
-  const now = new Date();
-
   const rows = readRows_(sheet_(SHEET.FEEDBACK)).filter(r => r['접수번호']).map(fb => {
     const sub = subByReceipt[fb['접수번호']] || {};
     return {
@@ -106,12 +105,9 @@ function adminDashboard(token) {
       ts: fb['제출시각'] instanceof Date ? fb['제출시각'].getTime() : 0,
       attempt: Number(sub['제출차수']) || 1,
       late: isLate_(stages, fb),
-      status: fb['상태'] || STATUS.NEW,
+      status: fbState_(fb),
       total: fb['예상 합계'],
-      published: fb['공개'] === true,
-      releaseDate: fb['공개일'] instanceof Date ? Utilities.formatDate(fb['공개일'], 'Asia/Seoul', 'yyyy-MM-dd') : '',
-      visible: isReleased_(fb, now),
-      hasPdf: !!fb['PDF ID'],
+      published: isReleased_(fb),
       arrivalMailed: !!fb['도착메일'],
       submitMailed: !!sub['완료메일'],
     };
@@ -135,7 +131,7 @@ function adminDashboard(token) {
     rosterCount: roster.length,
     missing,
     hasApiKey: !!PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY'),
-    statuses: Object.values(STATUS),
+    statuses: ['미작성', '작성됨', '공개'],
   };
 }
 
@@ -168,7 +164,7 @@ function adminGetItem(token, receipt) {
     .sort((a, b) => (order[a['단계ID']] - order[b['단계ID']]) || (new Date(a['제출시각']) - new Date(b['제출시각'])))
     .map(r => ({
       receipt: r['접수번호'], stageName: r['단계명'], time: fmtTime_(r['제출시각']),
-      status: r['상태'], total: r['예상 합계'], next: r['다음 단계까지 할 일'], improvements: r['보완할 점'],
+      status: fbState_(r), total: r['예상 합계'], next: r['다음 단계까지 할 일'], improvements: r['보완할 점'],
     }));
 
   let fileMime = '';
@@ -204,11 +200,9 @@ function adminGetItem(token, receipt) {
     improvements: String(fb['보완할 점'] || ''),
     nextSteps: String(fb['다음 단계까지 할 일'] || ''),
     summary: String(fb['한 줄 총평'] || ''),
-    status: fb['상태'] || STATUS.NEW,
-    published: fb['공개'] === true,
-    releaseDate: fb['공개일'] instanceof Date ? Utilities.formatDate(fb['공개일'], 'Asia/Seoul', 'yyyy-MM-dd') : '',
-    pdfUrl: fb['PDF ID'] ? `https://drive.google.com/file/d/${fb['PDF ID']}/view` : '',
-    pdfTime: fmtTime_(fb['PDF 생성시각']),
+    status: fbState_(fb),
+    published: isReleased_(fb),
+    publishedAt: fmtTime_(fb['공개시각']),
     aiTime: fmtTime_(fb['AI 초안시각']),
     arrivalMailed: fmtTime_(fb['도착메일']),
     history,
@@ -221,7 +215,7 @@ function noteOf_(receipt) {
 }
 
 /**
- * data: {scores:{항목: 점수}, strengths, improvements, nextSteps, summary, status, releaseDate('yyyy-MM-dd'|''), published}
+ * data: {scores:{항목: 점수}, strengths, improvements, nextSteps, summary, published(true/false)}
  */
 function adminSaveFeedback(token, receipt, data) {
   requireAdmin_(token);
@@ -229,7 +223,6 @@ function adminSaveFeedback(token, receipt, data) {
   const { sh, map, row } = findFeedback_(receipt);
   const rubric = getRubric_();
   const out = {};
-  let total = 0, any = false;
   rubric.forEach(r => {
     const raw = d.scores ? d.scores[r.item] : undefined;
     if (raw === undefined) return;
@@ -238,50 +231,21 @@ function adminSaveFeedback(token, receipt, data) {
     if (isNaN(v) || v < 0 || v > r.max) throw new Error(`'${r.item}' 점수는 0부터 ${r.max} 사이로 넣으세요.`);
     out[FB_SCORE_PREFIX + r.item] = v;
   });
+  let total = 0, any = false;
   rubric.forEach(r => {
     const k = FB_SCORE_PREFIX + r.item;
     const v = k in out ? out[k] : row[k];
     if (v !== '' && v != null && !isNaN(v)) { total += Number(v); any = true; }
   });
   out['예상 합계'] = any ? total : '';
-
   const texts = { strengths: '잘한 점', improvements: '보완할 점', nextSteps: '다음 단계까지 할 일', summary: '한 줄 총평' };
-  let contentChanged = false;
-  Object.keys(texts).forEach(k => {
-    if (d[k] === undefined) return;
-    const v = String(d[k]).slice(0, 5000);
-    if (v !== String(row[texts[k]] || '')) contentChanged = true;
-    out[texts[k]] = v;
-  });
-  rubric.forEach(r => {
-    const k = FB_SCORE_PREFIX + r.item;
-    if (k in out && String(out[k]) !== String(row[k])) contentChanged = true;
-  });
-
-  let status = d.status && Object.values(STATUS).indexOf(d.status) >= 0 ? d.status : row['상태'];
-  if (status === STATUS.NEW && contentChanged) status = STATUS.DRAFT;
-  // PDF를 만든 뒤 내용을 고치면 다시 만들어야 하므로 확정으로 되돌린다.
-  if (row['상태'] === STATUS.PDF && contentChanged && status === STATUS.PDF) status = STATUS.DONE;
-  out['상태'] = status;
-
-  if (d.releaseDate !== undefined) {
-    out['공개일'] = d.releaseDate ? parseDate_(d.releaseDate) : '';
-  }
-  if (d.published !== undefined) {
-    if (d.published && !row['PDF ID'] && status !== STATUS.PDF) throw new Error('PDF를 먼저 만든 뒤 공개하세요.');
-    out['공개'] = !!d.published;
-  }
+  Object.keys(texts).forEach(k => { if (d[k] !== undefined) out[texts[k]] = String(d[k]).slice(0, 5000); });
   writeCells_(sh, row._row, map, out);
-  if (status === STATUS.DONE && row['상태'] === STATUS.PDF) {
-    sh.getRange(row._row, map['상태']).setNote('PDF를 만든 뒤 내용이 바뀌었습니다. PDF를 다시 만드세요.');
+  if (d.published !== undefined) {
+    const res = setPublished_([row._row], !!d.published);
+    if (d.published && res.empty.length) throw new Error('의견을 먼저 쓴 뒤 공개하세요.');
   }
   return adminGetItem(token, receipt);
-}
-
-function parseDate_(s) {
-  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) throw new Error('공개일 형식이 바르지 않습니다.');
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }
 
 function adminAiDraft(token, receipt) {
@@ -294,7 +258,7 @@ function adminAiDraft(token, receipt) {
   return adminGetItem(token, receipt);
 }
 
-/** 미작성 제출 전체에 AI 초안. 실행 시간 안에서 할 수 있는 만큼 하고 남은 수를 돌려준다. */
+/** 아직 안 쓴 피드백 전체에 AI 초안. 실행 시간 안에서 할 수 있는 만큼 하고 남은 수를 돌려준다. */
 function adminAiDraftPending(token) {
   requireAdmin_(token);
   return makeDrafts_(pendingDraftRows_(), null, false);
@@ -305,34 +269,10 @@ function receiptsToRows_(receipts) {
   return readRows_(sheet_(SHEET.FEEDBACK)).filter(r => set.has(r['접수번호'])).map(r => r._row);
 }
 
-function adminSetStatus(token, receipts, status) {
+/** 공개 켜기/끄기 (켜면 도착 메일도 보낸다) */
+function adminPublish(token, receipts, on) {
   requireAdmin_(token);
-  if (Object.values(STATUS).indexOf(status) < 0) throw new Error('알 수 없는 상태입니다.');
-  const sh = sheet_(SHEET.FEEDBACK);
-  const map = headerMap_(sh);
-  const rows = receiptsToRows_(receipts);
-  rows.forEach(r => sh.getRange(r, map['상태']).setValue(status));
-  return { count: rows.length };
-}
-
-function adminMakePdfs(token, receipts) {
-  requireAdmin_(token);
-  const rows = readRows_(sheet_(SHEET.FEEDBACK));
-  const r = makePdfs_(receiptsToRows_(receipts), true);
-  r.leftReceipts = r.leftRows.map(n => (rows.find(x => x._row === n) || {})['접수번호']).filter(String);
-  delete r.leftRows;
-  return r;
-}
-
-function adminPublish(token, receipts, on, releaseDate) {
-  requireAdmin_(token);
-  const date = releaseDate === undefined ? undefined : (releaseDate ? parseDate_(releaseDate) : '');
-  return setPublish_(receiptsToRows_(receipts), !!on, date);
-}
-
-function adminSendArrivalMails(token) {
-  requireAdmin_(token);
-  return sendArrivalMails_();
+  return setPublished_(receiptsToRows_(receipts), !!on);
 }
 
 /** 교사가 제출 파일(PDF)을 관리 화면 안에서 미리 본다. */
@@ -345,11 +285,10 @@ function adminSubmissionPdf(token, receipt) {
   return { fileName: f.getName(), data: Utilities.base64Encode(f.getBlob().getBytes()) };
 }
 
+/** 학생이 보게 될 피드백 PDF를 미리 본다 (없거나 내용이 바뀌었으면 이때 만든다). */
 function adminFeedbackPdf(token, receipt) {
   requireAdmin_(token);
-  const { row } = findFeedback_(receipt);
-  if (!row['PDF ID']) throw new Error('아직 PDF가 없습니다.');
-  const f = DriveApp.getFileById(String(row['PDF ID']));
+  const f = ensurePdf_(receipt);
   return { fileName: f.getName(), data: Utilities.base64Encode(f.getBlob().getBytes()) };
 }
 
@@ -386,7 +325,6 @@ function adminGetConfig(token) {
     roster: getRoster_(),
     hasApiKey: !!PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY'),
     webAppUrl: (() => { try { return ScriptApp.getService().getUrl() || ''; } catch (e) { return ''; } })(),
-    dailyTrigger: ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'dailyArrivalJob'),
   };
 }
 
@@ -502,13 +440,4 @@ function adminSetApiKey(token, key) {
   if (!k) throw new Error('키를 넣으세요.');
   PropertiesService.getScriptProperties().setProperty('ANTHROPIC_API_KEY', k);
   return true;
-}
-
-function adminToggleDailyTrigger(token, on) {
-  requireAdmin_(token);
-  ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'dailyArrivalJob')
-    .forEach(t => ScriptApp.deleteTrigger(t));
-  if (on) ScriptApp.newTrigger('dailyArrivalJob').timeBased().everyDays(1).atHour(8).create();
-  return !!on;
 }

@@ -46,52 +46,34 @@ function sendSubmitMail_(o) {
   });
 }
 
-/** 공개되었고 공개일이 지난 피드백 가운데 아직 알리지 않은 학생에게 메일을 보낸다. */
-function sendArrivalMails_() {
+/** 학생 한 명에게 피드백 도착 메일을 보낸다. 보냈으면 true. */
+function sendArrivalMailFor_(fb) {
   const s = getSettings_();
-  if (!yes_(s[KEY.ARRIVE_MAIL])) return { sent: 0, skipped: 0, reason: '설정에서 꺼져 있음' };
-  const fbSh = sheet_(SHEET.FEEDBACK);
-  const fbMap = headerMap_(fbSh);
-  const subs = readRows_(sheet_(SHEET.SUBMIT));
-  const emailByReceipt = {};
-  subs.forEach(r => { emailByReceipt[r['접수번호']] = String(r['이메일'] || '').trim(); });
-  const rosterEmail = {};
-  getRoster_().forEach(r => { rosterEmail[r.id + '|' + r.name] = r.email; });
-
+  if (!yes_(s[KEY.ARRIVE_MAIL])) return false;
+  const roster = getRoster_().find(r => r.id === normId_(fb['학번']) && r.name === normName_(fb['이름']));
+  let email = roster && roster.email;
+  if (!email) {
+    const sub = readRows_(sheet_(SHEET.SUBMIT)).find(r => r['접수번호'] === fb['접수번호']);
+    email = sub ? String(sub['이메일'] || '').trim() : '';
+  }
+  if (!isEmail_(email) || MailApp.getRemainingDailyQuota() < 1) return false;
   const url = webAppUrl_();
-  const now = new Date();
-  let sent = 0, skipped = 0;
-  const quota = MailApp.getRemainingDailyQuota();
-
-  readRows_(fbSh).forEach(fb => {
-    if (!isReleased_(fb, now) || fb['도착메일']) return;
-    const email = rosterEmail[normId_(fb['학번']) + '|' + normName_(fb['이름'])] || emailByReceipt[fb['접수번호']];
-    if (!isEmail_(email) || sent >= quota - 1) { skipped++; return; }
-    const vars = { 이름: fb['이름'], 단계명: fb['단계명'], 과제명: s[KEY.TITLE] || '', 과목: s[KEY.COURSE] || '', 접수번호: fb['접수번호'] };
-    const inner = `
-      <p style="font-size:15px;line-height:1.7">${escHtml_(fb['이름'])} 학생, <b>${escHtml_(fb['단계명'])}</b> 단계 피드백이 도착했습니다.</p>
-      ${fb['한 줄 총평'] ? `<p style="background:#FFF6CC;border-left:6px solid #FFD93B;padding:10px 14px">${escHtml_(fb['한 줄 총평'])}</p>` : ''}
-      <p style="font-size:14px">웹앱에서 학번과 이름을 넣으면 피드백 문서(PDF)를 볼 수 있습니다. 다음 단계까지 할 일을 꼭 확인하세요.</p>
-      ${url ? `<p><a href="${escHtml_(url)}" style="display:inline-block;background:#2F5DA8;color:#fff;text-decoration:none;padding:10px 20px;border-radius:999px;font-weight:700">내 피드백 보러 가기</a></p>` : ''}`;
-    try {
-      MailApp.sendEmail({
-        to: email,
-        subject: fillTemplate_(s[KEY.ARRIVE_MAIL_SUBJECT] || '[{과제명}] {단계명} 피드백 도착', vars),
-        htmlBody: mailFrame_('피드백이 도착했습니다 📬', inner),
-        name: s[KEY.TEACHER] ? `${s[KEY.TEACHER]} 선생님` : '과제 피드백 도우미',
-      });
-      fbSh.getRange(fb._row, fbMap['도착메일']).setValue(new Date());
-      sent++;
-    } catch (err) {
-      console.error('도착 메일 실패', fb['접수번호'], err);
-      skipped++;
-    }
-  });
-  return { sent, skipped };
-}
-
-function menuSendArrivalMails() {
-  uiOnly_();
-  const r = sendArrivalMails_();
-  SpreadsheetApp.getUi().alert(r.reason ? `보내지 않았습니다: ${r.reason}` : `도착 메일 ${r.sent}통을 보냈습니다.${r.skipped ? ` (이메일이 없거나 실패: ${r.skipped}명)` : ''}`);
+  const vars = { 이름: fb['이름'], 단계명: fb['단계명'], 과제명: s[KEY.TITLE] || '', 과목: s[KEY.COURSE] || '', 접수번호: fb['접수번호'] };
+  const inner = `
+    <p style="font-size:15px;line-height:1.7">${escHtml_(fb['이름'])} 학생, <b>${escHtml_(fb['단계명'])}</b> 단계 피드백이 도착했습니다.</p>
+    ${fb['한 줄 총평'] ? `<p style="background:#FFF6CC;border-left:6px solid #FFD93B;padding:10px 14px">${escHtml_(fb['한 줄 총평'])}</p>` : ''}
+    <p style="font-size:14px">웹앱의 "내 피드백"에서 학번과 이름을 넣으면 피드백 문서(PDF)를 볼 수 있습니다. 다음 단계까지 할 일을 꼭 확인하세요.</p>
+    ${url ? `<p><a href="${escHtml_(url)}" style="display:inline-block;background:#2F5DA8;color:#fff;text-decoration:none;padding:10px 20px;border-radius:999px;font-weight:700">내 피드백 보러 가기</a></p>` : ''}`;
+  try {
+    MailApp.sendEmail({
+      to: email,
+      subject: fillTemplate_(s[KEY.ARRIVE_MAIL_SUBJECT] || '[{과제명}] {단계명} 피드백 도착', vars),
+      htmlBody: mailFrame_('피드백이 도착했습니다 📬', inner),
+      name: s[KEY.TEACHER] ? `${s[KEY.TEACHER]} 선생님` : '과제 피드백 도우미',
+    });
+    return true;
+  } catch (err) {
+    console.error('도착 메일 실패', fb['접수번호'], err);
+    return false;
+  }
 }

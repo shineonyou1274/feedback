@@ -3,29 +3,21 @@
  */
 
 function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('📮 과제 피드백')
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('📮 과제 피드백')
     .addItem('🖥 웹 관리 화면 열기', 'menuOpenAdmin')
-    .addItem('🎒 학생 화면 열기', 'menuOpenStudent')
     .addSeparator()
-    .addItem('① 처음 설정 (시트·폴더 만들기)', 'setupAll')
-    .addItem('루브릭 바꾼 뒤: 피드백 시트 점수 열 맞추기', 'syncFeedbackColumns')
-    .addItem('피드백 시트 정리 (빈 줄 지우기·빠진 제출 채우기)', 'menuRepairFeedback')
+    .addItem('🤖 고른 학생 피드백 만들기 (AI)', 'menuDraftSelected')
+    .addItem('🤖 아직 안 쓴 피드백 모두 만들기 (AI)', 'menuDraftAll')
+    .addItem('📄 고른 학생 PDF 미리 보기', 'menuPreviewPdf')
     .addSeparator()
-    .addItem('② 선택한 행: AI 예상 점수·피드백 초안', 'menuDraftSelected')
-    .addItem('② 미작성 전체: AI 초안 (이어서 실행)', 'menuDraftAll')
-    .addSeparator()
-    .addItem('③ 선택한 행: 확정 표시', 'menuConfirmSelected')
-    .addItem('④ 선택한 행: PDF 만들기', 'menuPdfSelected')
-    .addItem('④ 확정 전체: PDF 만들기 (이어서 실행)', 'menuPdfAll')
-    .addSeparator()
-    .addItem('⑤ 선택한 행: 공개', 'menuPublishSelected')
-    .addItem('⑤ 선택한 행: 공개 취소', 'menuUnpublishSelected')
-    .addItem('피드백 도착 메일 지금 보내기', 'menuSendArrivalMails')
-    .addSeparator()
-    .addItem('⚙️ 관리자 비밀번호 정하기 (웹 관리 화면)', 'menuSetAdminPassword')
-    .addItem('⚙️ AI API 키 등록', 'menuSetApiKey')
-    .addItem('⚙️ 매일 아침 도착 메일 자동 발송 켜기', 'installDailyTrigger')
+    .addSubMenu(ui.createMenu('⚙️ 설정')
+      .addItem('처음 설정 (시트·폴더 만들기)', 'setupAll')
+      .addItem('관리자 비밀번호 정하기', 'menuSetAdminPassword')
+      .addItem('AI API 키 등록', 'menuSetApiKey')
+      .addItem('루브릭 바꾼 뒤: 점수 열 맞추기', 'syncFeedbackColumns')
+      .addItem('피드백 시트 정리', 'menuRepairFeedback')
+      .addItem('학생 화면 열기', 'menuOpenStudent'))
     .addToUi();
   // 예전 버전에서 맨 아래로 밀린 피드백 행을 올리고, 빠진 제출을 채운다.
   try { if (ss_().getSheetByName(SHEET.FEEDBACK)) repairFeedbackSheet_(); } catch (e) { /* 처음 설정 전 */ }
@@ -70,6 +62,7 @@ function setupAll() {
   ensureFolders_();
   styleSheets_();
 
+  ensureTriggers_();
   if (!hasAdminPassword_()) menuSetAdminPassword();
 
   SpreadsheetApp.getUi().alert(
@@ -77,8 +70,8 @@ function setupAll() {
     '1) 확장 프로그램 > Apps Script > 배포 > 새 배포 > 웹 앱으로 배포하세요.\n' +
     '   (실행: 나, 액세스: 모든 사용자)\n' +
     '2) 학생에게는 웹앱 주소를 그대로 알려 주세요. 제출과 피드백 확인을 모두 이 주소에서 합니다.\n' +
-    '3) 이제부터는 웹앱 주소 끝에 ?page=admin 을 붙인 관리 화면에서 모두 할 수 있습니다.\n' +
-    '   (과제 설정, 명단, 제출 현황, AI 초안, 피드백 작성, PDF, 공개, 메일)');
+    '3) 피드백 시트에서 의견을 쓰고(또는 🤖 AI로 만들고) "공개"를 체크하면 끝입니다.\n' +
+    '   학생 화면에 바로 보이고 도착 메일이 갑니다. PDF는 자동으로 만들어집니다.');
 }
 
 function ensureSheet_(name, headers, rows) {
@@ -116,7 +109,7 @@ function defaultSettings_() {
     [KEY.EXTS, 'pdf,docx,hwp,hwpx,pptx,jpg,png', '쉼표로 구분'],
     [KEY.SUBMIT_MAIL, '예', '제출하면 학생에게 접수 확인 메일을 바로 보냅니다.'],
     [KEY.SUBMIT_MAIL_SUBJECT, '[{과제명}] {단계명} 제출이 완료되었습니다', '{이름} {단계명} {과제명} {접수번호} 사용 가능'],
-    [KEY.ARRIVE_MAIL, '예', '공개일이 된 피드백을 학생에게 알립니다.'],
+    [KEY.ARRIVE_MAIL, '예', '공개를 체크하면 학생에게 바로 알립니다.'],
     [KEY.ARRIVE_MAIL_SUBJECT, '[{과제명}] {단계명} 피드백이 도착했습니다', ''],
     [KEY.AI_MODEL, 'claude-opus-5-5', 'AI 초안에 쓰는 모델'],
     [KEY.AI_EFFORT, 'medium', 'low / medium / high — 높을수록 꼼꼼하지만 느립니다.'],
@@ -215,13 +208,8 @@ function styleFeedbackSheet_(sh) {
   Object.keys(m).forEach(h => {
     if (h.indexOf(FB_SCORE_PREFIX) === 0 || h === '예상 합계') sh.getRange(1, m[h]).setBackground('#FFD93B').setFontColor('#222222');
   });
-  const rows = Math.max(sh.getMaxRows() - 1, 1);
-  if (m['상태']) {
-    sh.getRange(2, m['상태'], rows, 1).setDataValidation(
-      SpreadsheetApp.newDataValidation().requireValueInList(Object.values(STATUS), true).build());
-  }
   // 체크박스는 제출 행이 생길 때 그 행에만 넣는다 (빈 줄에 미리 넣으면 새 행이 맨 아래로 밀린다).
-  if (m['공개일']) sh.getRange(2, m['공개일'], rows, 1).setNumberFormat('yyyy-mm-dd');
+  if (m['공개']) sh.getRange(1, m['공개']).setBackground('#1f8a4c');
   FB_CONTENT_COLS.forEach(h => { if (m[h]) sh.setColumnWidth(m[h], 260); });
   if (m['학생 메모']) sh.setColumnWidth(m['학생 메모'], 260);
   sh.setFrozenColumns(3);
@@ -229,34 +217,18 @@ function styleFeedbackSheet_(sh) {
 
 // ───────────────────────── 트리거 ─────────────────────────
 
-function installDailyTrigger() {
-  uiOnly_();
-  ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'dailyArrivalJob')
-    .forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('dailyArrivalJob').timeBased().everyDays(1).atHour(8).create();
-  SpreadsheetApp.getUi().alert('매일 아침 8시쯤 공개일이 된 피드백의 도착 메일을 보냅니다.');
-}
+/** 예전 버전의 매일 트리거가 남아 있을 때를 위한 빈 함수 (ensureTriggers_가 지운다) */
+function dailyArrivalJob() {}
 
-function dailyArrivalJob() {
-  sendArrivalMails_();
-}
-
-/** (단순 트리거) 피드백 시트 편집: 예상 합계 다시 계산, PDF 만든 뒤 내용을 고치면 상태를 '확정'으로 되돌림 */
+/** (단순 트리거) 피드백 시트에서 점수를 고치면 예상 합계를 다시 계산한다. */
 function onEdit(e) {
   if (!e || !e.range) return;
   const sh = e.range.getSheet();
   if (sh.getName() !== SHEET.FEEDBACK || e.range.getRow() < 2) return;
   const m = headerMap_(sh);
   const head = Object.keys(m).find(h => m[h] === e.range.getColumn()) || '';
-  const isScore = head.indexOf(FB_SCORE_PREFIX) === 0;
-  if (!isScore && FB_CONTENT_COLS.indexOf(head) < 0) return;
-  const row = e.range.getRow();
-  if (isScore) recalcTotal_(sh, m, row);
-  const status = sh.getRange(row, m['상태']).getValue();
-  if (status === STATUS.PDF) {
-    sh.getRange(row, m['상태']).setValue(STATUS.DONE).setNote('PDF를 만든 뒤 내용이 바뀌었습니다. PDF를 다시 만드세요.');
-  }
+  if (head.indexOf(FB_SCORE_PREFIX) !== 0) return;
+  recalcTotal_(sh, m, e.range.getRow());
 }
 
 function recalcTotal_(sh, m, row) {
@@ -284,6 +256,7 @@ function menuSetApiKey() {
 
 function menuRepairFeedback() {
   uiOnly_();
+  ensureTriggers_();
   const r = repairFeedbackSheet_();
-  SpreadsheetApp.getUi().alert(`정리했습니다.\n빈 줄 ${r.removed}개를 지우고, 빠져 있던 제출 ${r.added}건을 채웠습니다.`);
+  SpreadsheetApp.getUi().alert(`정리했습니다.\n빈 줄 ${r.removed}개를 지우고, 빠져 있던 제출 ${r.added}건을 채우고, 명단에 ${r.rosterAdded}명을 넣었습니다.`);
 }

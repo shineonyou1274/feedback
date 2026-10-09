@@ -57,17 +57,11 @@
 
           <div class="bulk">
             <span id="selInfo">0명 선택</span>
-            <button class="btn small" data-bulk="draft">🤖 AI 초안</button>
-            <button class="btn small" data-bulk="confirm">확정</button>
-            <button class="btn small" data-bulk="pdf">📄 PDF 만들기</button>
-            <span class="pub">
-              <input type="date" id="bulkDate" title="공개일 (비우면 바로 공개)">
-              <button class="btn small primary" data-bulk="publish">공개</button>
-            </span>
+            <button class="btn small" data-bulk="draft">🤖 AI 피드백 만들기</button>
+            <button class="btn small primary" data-bulk="publish">✅ 공개</button>
             <button class="btn small" data-bulk="unpublish">공개 취소</button>
             <span class="grow"></span>
-            <button class="btn small" id="btnDraftPending">미작성 전체 AI 초안</button>
-            <button class="btn small" id="btnMail">📬 도착 메일 보내기</button>
+            <button class="btn small" id="btnDraftPending">🤖 안 쓴 피드백 모두 AI로</button>
           </div>
 
           <div class="table-wrap">
@@ -125,18 +119,13 @@
                 <label>다음 단계까지 할 일<textarea id="edNext" rows="4" placeholder="1. …&#10;2. …"></textarea></label>
                 <label>한 줄 총평<input id="edSummary" maxlength="200"></label>
 
-                <div class="row3">
-                  <label>상태<select id="edStatus"></select></label>
-                  <label>공개일<input type="date" id="edRelease"></label>
-                  <label class="chk big-chk"><input type="checkbox" id="edPublished"> 학생에게 공개</label>
-                </div>
+                <label class="chk big-chk publish-chk"><input type="checkbox" id="edPublished"> 학생에게 공개 <span class="muted small-text">(체크하고 저장하면 바로 보이고 도착 메일이 갑니다)</span></label>
                 <p class="muted small-text" id="edMeta"></p>
                 <div class="err" id="edErr" role="alert"></div>
                 <div class="btn-row">
                   <button type="submit" class="btn">저장</button>
-                  <button type="button" class="btn primary" id="btnSaveConfirm">저장하고 확정</button>
-                  <button type="button" class="btn" id="btnPdf">📄 PDF 만들기</button>
-                  <button type="button" class="btn" id="btnPdfView" hidden>PDF 보기</button>
+                  <button type="button" class="btn primary" id="btnSavePublish">저장하고 공개</button>
+                  <button type="button" class="btn" id="btnPdfView">📄 학생이 볼 PDF 미리 보기</button>
                 </div>
               </form>
             </div>
@@ -174,11 +163,6 @@
           <p class="muted small-text">한 줄에 "학번 이름 이메일" 순서로 넣습니다. 스프레드시트에서 세 열을 복사해 붙여 넣어도 됩니다. 이메일은 비워도 됩니다.</p>
           <textarea id="rosterText" rows="10" placeholder="1101 홍길동 hong@school.kr"></textarea>
           <div class="row-between"><span class="muted" id="rosterInfo"></span><button class="btn primary small" id="btnSaveRoster">명단 저장</button></div>
-        </div>
-        <div class="card">
-          <h2>메일</h2>
-          <label class="chk big-chk"><input type="checkbox" id="dailyToggle"> 매일 아침 8시쯤 공개일이 된 피드백의 도착 메일 자동 발송</label>
-          <p class="muted small-text">제출 완료 메일과 메일 제목은 "과제 설정"에서 바꿉니다.</p>
         </div>
         <div class="card">
           <h2>AI 초안</h2>

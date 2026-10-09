@@ -4,34 +4,7 @@
 
 const C = { yellow: '#FFD93B', denim: '#2F5DA8', ink: '#222222', soft: '#FFF6CC' };
 
-function menuConfirmSelected() {
-  uiOnly_();
-  const sh = sheet_(SHEET.FEEDBACK);
-  const map = headerMap_(sh);
-  const rows = selectedFeedbackRows_();
-  rows.forEach(r => sh.getRange(r, map['상태']).setValue(STATUS.DONE));
-  SpreadsheetApp.getActive().toast(`${rows.length}행을 확정했습니다. 이제 PDF를 만드세요.`);
-}
-
-function menuPdfSelected() {
-  uiOnly_();
-  alertPdfResult_(makePdfs_(selectedFeedbackRows_(), true));
-}
-
-function menuPdfAll() {
-  uiOnly_();
-  const rows = readRows_(sheet_(SHEET.FEEDBACK)).filter(r => r['상태'] === STATUS.DONE).map(r => r._row);
-  alertPdfResult_(makePdfs_(rows, false));
-}
-
-function alertPdfResult_(r) {
-  SpreadsheetApp.getUi().alert(
-    `PDF ${r.done}건을 만들었습니다.` +
-    (r.left ? `\n실행 시간 제한 때문에 ${r.left}건이 남았습니다. 같은 메뉴를 한 번 더 실행하세요.` : '') +
-    (r.skipped.length ? `\n건너뜀: ${r.skipped.join(', ')}` : '') +
-    (r.errors.length ? `\n\n실패:\n${r.errors.join('\n')}` : '') +
-    '\n\n학생에게 보이게 하려면 "공개" 칸을 체크하고 공개일을 정하세요. (공개일이 비어 있으면 바로 보입니다.)');
-}
+// ───────────────────────── PDF (필요할 때 자동으로 만든다) ─────────────────────────
 
 function pdfContext_() {
   const ctx = {
@@ -45,33 +18,53 @@ function pdfContext_() {
   return ctx;
 }
 
-/** 피드백 시트의 행 번호 목록으로 PDF를 만든다. 결과: {done, left, skipped[], errors[]} */
-function makePdfs_(targetRows, allowAnyStatus) {
+/** PDF에 들어가는 내용의 지문. 내용이 바뀌면 PDF를 새로 만든다. */
+function pdfHash_(row, ctx) {
+  const parts = [row['이름'], row['단계명'], row['예상 합계']]
+    .concat(ctx.rubric.map(r => r.item + '=' + row[FB_SCORE_PREFIX + r.item]))
+    .concat(FB_CONTENT_COLS.map(k => row[k]))
+    .concat(growth_(row, ctx).map(h => h.stage + h.total));
+  const raw = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(parts), Utilities.Charset.UTF_8);
+  return Utilities.base64Encode(raw);
+}
+
+/**
+ * 접수번호의 PDF 파일을 돌려준다. 없거나 내용이 바뀌었으면 새로 만든다.
+ * 선생님은 PDF를 따로 만들 필요가 없다. 학생이 열거나 선생님이 미리 볼 때 만들어진다.
+ */
+function ensurePdf_(receipt) {
   const sh = sheet_(SHEET.FEEDBACK);
   const map = headerMap_(sh);
   const ctx = pdfContext_();
-  const all = ctx.fbRows;
-  const start = Date.now();
-  let done = 0, processed = 0;
-  const errors = [], skipped = [];
-  for (const r of targetRows) {
-    if (Date.now() - start > TIME_BUDGET_MS) break;
-    processed++;
-    const row = all.find(x => x._row === r);
-    if (!row || !row['접수번호']) continue;
-    if (!allowAnyStatus && row['상태'] !== STATUS.DONE) continue;
-    if (row['상태'] === STATUS.NEW || row['상태'] === '') { skipped.push(`${row['이름']}(미작성)`); continue; }
+  const row = ctx.fbRows.find(r => r['접수번호'] === receipt);
+  if (!row) throw new Error('해당 제출을 찾지 못했습니다.');
+  if (!hasContent_(row)) throw new Error('아직 피드백 내용이 없습니다.');
+  const hash = pdfHash_(row, ctx);
+  if (row['PDF ID'] && row['PDF 해시'] === hash) {
     try {
-      const pdf = buildPdf_(row, ctx);
-      writeCells_(sh, r, map, { 'PDF ID': pdf.getId(), 'PDF 생성시각': new Date(), '상태': STATUS.PDF });
-      sh.getRange(r, map['PDF']).setFormula(`=HYPERLINK("${pdf.getUrl()}","PDF 열기")`);
-      sh.getRange(r, map['상태']).clearNote();
-      done++;
-    } catch (err) {
-      errors.push(`${row['학번']} ${row['이름']}: ${err.message}`);
-    }
+      const f = DriveApp.getFileById(String(row['PDF ID']));
+      if (!f.isTrashed()) return f;
+    } catch (e) { /* 지워졌으면 새로 만든다 */ }
   }
-  return { done, left: targetRows.length - processed, leftRows: targetRows.slice(processed), skipped, errors };
+  const pdf = buildPdf_(row, ctx);
+  writeCells_(sh, row._row, map, { 'PDF ID': pdf.getId(), 'PDF 해시': hash });
+  if (map['PDF']) sh.getRange(row._row, map['PDF']).setFormula(`=HYPERLINK("${pdf.getUrl()}","PDF 열기")`);
+  return pdf;
+}
+
+/** 시트 메뉴: 고른 학생의 PDF를 만들어 새 탭에서 연다 (공개 전에 미리 보기). */
+function menuPreviewPdf() {
+  uiOnly_();
+  const rows = selectedFeedbackRows_();
+  const all = readRows_(sheet_(SHEET.FEEDBACK));
+  const row = all.find(r => r._row === rows[0]);
+  if (!row) throw new Error('학생 행을 하나 고르세요.');
+  const pdf = ensurePdf_(row['접수번호']);
+  const url = pdf.getUrl();
+  SpreadsheetApp.getUi().showModelessDialog(HtmlService.createHtmlOutput(
+    `<div style="font-family:sans-serif;padding:8px"><p><b>${escHtml_(row['이름'])}</b> 학생 PDF를 엽니다.</p>
+     <p><a href="${escHtml_(url)}" target="_blank" style="font-size:16px;font-weight:bold">👉 열리지 않으면 여기를 누르세요</a></p></div>
+     <script>window.open(${JSON.stringify(url)}, '_blank');</script>`).setWidth(360).setHeight(130), 'PDF 미리 보기');
 }
 
 /** 피드백 문서를 구글 문서로 만들어 PDF로 저장하고, 문서는 지운다. */
@@ -222,7 +215,7 @@ function growth_(row, ctx) {
   const latest = {};
   ctx.fbRows
     .filter(r => normId_(r['학번']) === normId_(row['학번']) && order[r['단계ID']] <= cur && r['예상 합계'] !== '')
-    .filter(r => r['접수번호'] === row['접수번호'] || r['상태'] === STATUS.DONE || r['상태'] === STATUS.PDF)
+    .filter(r => r['접수번호'] === row['접수번호'] || hasContent_(r))
     .forEach(r => {
       const prev = latest[r['단계ID']];
       if (r['단계ID'] === row['단계ID'] && r['접수번호'] !== row['접수번호']) return; // 같은 단계는 지금 행만
@@ -235,30 +228,70 @@ function growth_(row, ctx) {
 
 // ───────────────────────── 공개 ─────────────────────────
 
-function menuPublishSelected() { uiOnly_(); alertPublish_(setPublish_(selectedFeedbackRows_(), true), true); }
-function menuUnpublishSelected() { uiOnly_(); alertPublish_(setPublish_(selectedFeedbackRows_(), false), false); }
-
-/** 결과: {count, noPdf[]} — releaseDate(Date|''|undefined)를 주면 공개일도 함께 바꾼다. */
-function setPublish_(rows, on, releaseDate) {
+/**
+ * 공개 켜기/끄기. 켜면 공개 시각을 남기고 도착 메일을 보낸다 (한 번만).
+ * 결과: {count, empty[], mailed}
+ */
+function setPublished_(rows, on) {
   const sh = sheet_(SHEET.FEEDBACK);
   const map = headerMap_(sh);
   const all = readRows_(sh);
-  let count = 0;
-  const noPdf = [];
+  let count = 0, mailed = 0;
+  const empty = [];
   rows.forEach(r => {
     const row = all.find(x => x._row === r);
-    if (!row) return;
-    if (on && !row['PDF ID']) { noPdf.push(row['이름']); return; }
-    sh.getRange(r, map['공개']).setValue(on);
-    if (on && releaseDate !== undefined) sh.getRange(r, map['공개일']).setValue(releaseDate);
+    if (!row || !row['접수번호']) return;
+    if (on && !hasContent_(row)) {
+      empty.push(String(row['이름']));
+      sh.getRange(r, map['공개']).setValue(false);
+      return;
+    }
+    sh.getRange(r, map['공개']).setValue(!!on);
+    if (on) {
+      if (!row['공개시각'] && map['공개시각']) sh.getRange(r, map['공개시각']).setValue(new Date());
+      if (!row['도착메일'] && sendArrivalMailFor_(row)) {
+        sh.getRange(r, map['도착메일']).setValue(new Date());
+        mailed++;
+      }
+    }
     count++;
   });
-  return { count, noPdf };
+  return { count, empty, mailed };
 }
 
-function alertPublish_(r, on) {
-  SpreadsheetApp.getUi().alert(
-    `${r.count}행을 ${on ? '공개' : '공개 취소'}했습니다.` +
-    (on ? '\n공개일이 정해져 있으면 그날부터, 비어 있으면 지금부터 학생 화면에 보입니다.' : '') +
-    (r.noPdf.length ? `\n\nPDF가 없어 건너뜀: ${r.noPdf.join(', ')}` : ''));
+/** (설치형 트리거) 시트에서 '공개' 칸을 체크하면 바로 공개 처리와 도착 메일 */
+function onFeedbackEditInstalled(e) {
+  if (!e || !e.range) return;
+  const sh = e.range.getSheet();
+  if (sh.getName() !== SHEET.FEEDBACK) return;
+  const map = headerMap_(sh);
+  if (!map['공개'] || e.range.getColumn() > map['공개'] || e.range.getLastColumn() < map['공개']) return;
+  const rows = [];
+  for (let r = Math.max(2, e.range.getRow()); r <= e.range.getLastRow(); r++) {
+    if (sh.getRange(r, map['공개']).getValue() === true) rows.push(r);
+  }
+  if (!rows.length) return;
+  const res = setPublished_(rows, true);
+  if (res.empty.length) {
+    SpreadsheetApp.getActive().toast(`의견이 비어 있어 공개하지 않았습니다: ${res.empty.join(', ')}`, '공개', 6);
+  } else {
+    SpreadsheetApp.getActive().toast(`${res.count}명 공개${res.mailed ? ` · 도착 메일 ${res.mailed}통` : ''}`, '공개', 4);
+  }
+}
+
+/** 시트에서 공개 체크가 바로 동작하도록 설치형 편집 트리거를 둔다. 예전 매일 트리거는 지운다. */
+function ensureTriggers_() {
+  const cache = CacheService.getScriptCache();
+  if (cache.get('triggers_ok')) return;
+  try {
+    const ss = ss_();
+    const ts = ScriptApp.getProjectTriggers();
+    ts.filter(t => t.getHandlerFunction() === 'dailyArrivalJob').forEach(t => ScriptApp.deleteTrigger(t));
+    if (!ts.some(t => t.getHandlerFunction() === 'onFeedbackEditInstalled')) {
+      ScriptApp.newTrigger('onFeedbackEditInstalled').forSpreadsheet(ss).onEdit().create();
+    }
+    cache.put('triggers_ok', '1', 6 * 60 * 60);
+  } catch (err) {
+    console.error('트리거 설치 실패', err);
+  }
 }

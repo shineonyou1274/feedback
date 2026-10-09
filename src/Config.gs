@@ -43,17 +43,23 @@ const FB_HEAD = ['접수번호', '학번', '이름', '단계ID', '단계명', '�
 const FB_SCORE_PREFIX = '예상:';
 const FB_TAIL = [
   '예상 합계', '잘한 점', '보완할 점', '다음 단계까지 할 일', '한 줄 총평',
-  '상태', '공개일', '공개', 'PDF', 'PDF ID', 'PDF 생성시각', '도착메일', 'AI 초안시각',
+  '공개', '공개시각', '도착메일', 'PDF', 'PDF ID', 'PDF 해시', 'AI 초안시각',
 ];
-/** 고치면 PDF를 다시 만들어야 하는 열 */
+/** 예전 버전에만 있던 열 (정리할 때 지운다) */
+const FB_OLD_COLS = ['상태', '공개일', 'PDF 생성시각'];
+/** 선생님 의견 칸 */
 const FB_CONTENT_COLS = ['잘한 점', '보완할 점', '다음 단계까지 할 일', '한 줄 총평'];
 
-const STATUS = {
-  NEW: '미작성',
-  DRAFT: 'AI 초안',
-  DONE: '확정',
-  PDF: 'PDF 완료',
-};
+/** 의견이 하나라도 적혀 있으면 '작성됨' */
+function hasContent_(fb) {
+  return FB_CONTENT_COLS.some(k => String(fb[k] == null ? '' : fb[k]).trim() !== '');
+}
+
+/** 화면에 보일 상태: 미작성 / 작성됨 / 공개 */
+function fbState_(fb) {
+  if (fb['공개'] === true && hasContent_(fb)) return '공개';
+  return hasContent_(fb) ? '작성됨' : '미작성';
+}
 
 const TIME_BUDGET_MS = 4.5 * 60 * 1000; // 6분 실행 제한 전에 멈춘다.
 
@@ -121,6 +127,10 @@ function lastDataRow_(sh, col) {
  */
 function repairFeedbackSheet_() {
   const sh = sheet_(SHEET.FEEDBACK);
+  // 예전 열(상태·공개일 등)을 지우고 새 열을 붙인다.
+  FB_OLD_COLS.forEach(h => { const c = headerMap_(sh)[h]; if (c) sh.deleteColumn(c); });
+  const have0 = headerMap_(sh);
+  FB_TAIL.forEach(h => { if (!have0[h]) sh.getRange(1, sh.getLastColumn() + 1).setValue(h); });
   const map = headerMap_(sh);
   const col = map['접수번호'];
   let removed = 0, added = 0;
@@ -157,7 +167,39 @@ function repairFeedbackSheet_() {
     });
     added++;
   });
-  return { removed, added };
+  const rosterAdded = syncRoster_();
+  return { removed, added, rosterAdded };
+}
+
+/** 제출한 학생을 명단에 채우고, 처음 설정 때 넣은 예시(1101 홍길동)는 제출이 없으면 지운다. */
+function syncRoster_() {
+  let sh = ss_().getSheetByName(SHEET.ROSTER);
+  if (!sh) {
+    sh = ss_().insertSheet(SHEET.ROSTER);
+    sh.getRange(1, 1, 1, 3).setValues([['학번', '이름', '이메일']]);
+  }
+  const subs = readRows_(sheet_(SHEET.SUBMIT)).filter(r => r['학번'] !== '');
+  const submitted = new Set(subs.map(r => normId_(r['학번'])));
+  // 예시 행 지우기
+  const rows = readRows_(sh);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (normId_(r['학번']) === '1101' && normName_(r['이름']) === '홍길동' && !String(r['이메일'] || '') && !submitted.has('1101')) {
+      sh.deleteRow(r._row);
+    }
+  }
+  const have = new Set(readRows_(sh).map(r => normId_(r['학번'])).filter(Boolean));
+  let n = 0;
+  subs.forEach(r => {
+    const id = normId_(r['학번']);
+    if (!id || have.has(id)) return;
+    have.add(id);
+    const row = lastDataRow_(sh, 1) + 1;
+    sh.getRange(row, 1).setNumberFormat('@');
+    sh.getRange(row, 1, 1, 3).setValues([[id, normName_(r['이름']), String(r['이메일'] || '')]]);
+    n++;
+  });
+  return n;
 }
 
 // ───────────────────────── 설정 읽기 ─────────────────────────

@@ -133,6 +133,7 @@ function submitAssignment(payload) {
     lock.releaseLock();
   }
 
+  ensureTriggers_();
   let mailed = false;
   if (email && yes_(s[KEY.SUBMIT_MAIL])) {
     try {
@@ -167,7 +168,7 @@ function addFeedbackRow_(o) {
   const memo = `[한 일] ${o.did}` + (o.question ? `\n[어려운 점·질문] ${o.question}` : '') + (o.attempt > 1 ? `\n(${o.attempt}번째 제출)` : '');
   const record = {
     '접수번호': o.receipt, '학번': o.id, '이름': o.name, '단계ID': o.stage.id, '단계명': o.stage.name,
-    '제출시각': o.now, '학생 메모': memo, '상태': STATUS.NEW, '공개': false,
+    '제출시각': o.now, '학생 메모': memo, '공개': false,
   };
   const line = new Array(sh.getLastColumn()).fill('');
   Object.keys(record).forEach(k => { if (map[k]) line[map[k] - 1] = record[k]; });
@@ -179,10 +180,6 @@ function addFeedbackRow_(o) {
     sh.getRange(row, map['제출파일']).setFormula(`=HYPERLINK("${o.fileUrl}","${String(o.fileName).replace(/"/g, '')}")`);
   }
   if (map['공개']) sh.getRange(row, map['공개']).insertCheckboxes();
-  if (map['상태']) {
-    sh.getRange(row, map['상태']).setDataValidation(
-      SpreadsheetApp.newDataValidation().requireValueInList(Object.values(STATUS), true).build());
-  }
 }
 
 /** 명단에 없는 학생이 제출하면 명단에 자동으로 넣는다 (미제출 확인과 메일 발송에 쓰인다). */
@@ -238,7 +235,7 @@ function lookup(studentId, name) {
 
   const items = subs.map(r => {
     const fb = fbByReceipt[r['접수번호']] || {};
-    const released = isReleased_(fb, now);
+    const released = isReleased_(fb);
     const out = {
       receipt: r['접수번호'],
       time: fmtTime_(r['제출시각']),
@@ -250,7 +247,7 @@ function lookup(studentId, name) {
       question: r['어려웠던 점·질문'],
       fileName: r['파일명'],
       hasBody: !!r['본문'],
-      status: released ? 'arrived' : (fb['상태'] && fb['상태'] !== STATUS.NEW ? 'writing' : 'reading'),
+      status: released ? 'arrived' : 'reading',
     };
     if (released) {
       out.scores = rubric.map(rb => ({ item: rb.item, max: rb.max, score: fb[FB_SCORE_PREFIX + rb.item] }));
@@ -258,7 +255,7 @@ function lookup(studentId, name) {
       out.maxTotal = maxTotal;
       out.summary = fb['한 줄 총평'];
       out.next = fb['다음 단계까지 할 일'];
-      out.hasPdf = !!fb['PDF ID'];
+      out.hasPdf = true;
     }
     return out;
   }).sort((a, b) => b.ts - a.ts);
@@ -278,15 +275,9 @@ function lookup(studentId, name) {
   return { found: true, name: nm, items, progress };
 }
 
-/** 공개 체크 + 공개일 지남 + PDF 있음 */
-function isReleased_(fb, now) {
-  if (!fb || fb['공개'] !== true || !fb['PDF ID']) return false;
-  const d = fb['공개일'];
-  if (d instanceof Date) {
-    const day = new Date(d); day.setHours(0, 0, 0, 0);
-    if (now < day) return false;
-  }
-  return true;
+/** 공개 체크 + 의견이 있음 */
+function isReleased_(fb) {
+  return !!fb && fb['공개'] === true && hasContent_(fb);
 }
 
 /** 본인 확인 뒤 공개된 피드백 PDF를 base64로 돌려준다. 파일 공유 설정을 바꾸지 않아도 된다. */
@@ -295,8 +286,8 @@ function getFeedbackPdf(studentId, name, receipt) {
   const nm = normName_(name);
   const fb = readRows_(sheet_(SHEET.FEEDBACK))
     .find(r => r['접수번호'] === receipt && normId_(r['학번']) === id && normName_(r['이름']) === nm);
-  if (!fb || !isReleased_(fb, new Date())) throw new Error('아직 볼 수 있는 피드백이 없습니다.');
-  const file = DriveApp.getFileById(String(fb['PDF ID']));
+  if (!isReleased_(fb)) throw new Error('아직 볼 수 있는 피드백이 없습니다.');
+  const file = ensurePdf_(receipt); // 없거나 내용이 바뀌었으면 이때 만든다.
   return {
     fileName: file.getName(),
     data: Utilities.base64Encode(file.getBlob().getBytes()),
