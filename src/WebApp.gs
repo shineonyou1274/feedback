@@ -170,8 +170,10 @@ function addFeedbackRow_(o) {
   };
   const line = new Array(sh.getLastColumn()).fill('');
   Object.keys(record).forEach(k => { if (map[k]) line[map[k] - 1] = record[k]; });
-  sh.appendRow(line);
-  const row = sh.getLastRow();
+  // appendRow는 체크박스만 있는 빈 줄도 '내용 있음'으로 보므로, 접수번호가 있는 마지막 줄 바로 아래에 쓴다.
+  const row = lastDataRow_(sh, map['접수번호']) + 1;
+  if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 10);
+  sh.getRange(row, 1, 1, line.length).setValues([line]);
   if (o.fileUrl && map['제출파일']) {
     sh.getRange(row, map['제출파일']).setFormula(`=HYPERLINK("${o.fileUrl}","${String(o.fileName).replace(/"/g, '')}")`);
   }

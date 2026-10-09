@@ -7,6 +7,7 @@ function onOpen() {
     .createMenu('📮 과제 피드백')
     .addItem('① 처음 설정 (시트·폴더 만들기)', 'setupAll')
     .addItem('루브릭 바꾼 뒤: 피드백 시트 점수 열 맞추기', 'syncFeedbackColumns')
+    .addItem('피드백 시트 정리 (빈 줄 지우기·빠진 제출 채우기)', 'menuRepairFeedback')
     .addSeparator()
     .addItem('② 선택한 행: AI 예상 점수·피드백 초안', 'menuDraftSelected')
     .addItem('② 미작성 전체: AI 초안 (이어서 실행)', 'menuDraftAll')
@@ -156,6 +157,7 @@ function syncFeedbackColumns(silent) {
     map = headerMap_(sh);
   });
   styleFeedbackSheet_(sh);
+  repairFeedbackSheet_();
   if (silent !== true) SpreadsheetApp.getActive().toast('피드백 시트의 점수 열을 루브릭에 맞췄습니다.');
 }
 
@@ -191,7 +193,7 @@ function styleFeedbackSheet_(sh) {
     sh.getRange(2, m['상태'], rows, 1).setDataValidation(
       SpreadsheetApp.newDataValidation().requireValueInList(Object.values(STATUS), true).build());
   }
-  if (m['공개']) sh.getRange(2, m['공개'], rows, 1).insertCheckboxes();
+  // 체크박스는 제출 행이 생길 때 그 행에만 넣는다 (빈 줄에 미리 넣으면 새 행이 맨 아래로 밀린다).
   if (m['공개일']) sh.getRange(2, m['공개일'], rows, 1).setNumberFormat('yyyy-mm-dd');
   FB_CONTENT_COLS.forEach(h => { if (m[h]) sh.setColumnWidth(m[h], 260); });
   if (m['학생 메모']) sh.setColumnWidth(m['학생 메모'], 260);
@@ -251,4 +253,10 @@ function menuSetApiKey() {
   if (!key) return;
   PropertiesService.getScriptProperties().setProperty('ANTHROPIC_API_KEY', key);
   ui.alert('API 키를 저장했습니다.');
+}
+
+function menuRepairFeedback() {
+  uiOnly_();
+  const r = repairFeedbackSheet_();
+  SpreadsheetApp.getUi().alert(`정리했습니다.\n빈 줄 ${r.removed}개를 지우고, 빠져 있던 제출 ${r.added}건을 채웠습니다.`);
 }

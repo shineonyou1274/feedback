@@ -82,6 +82,11 @@ function adminChangePassword(token, oldPw, newPw) {
 
 function adminDashboard(token) {
   requireAdmin_(token);
+  // 예전 버전에서 맨 아래로 밀린 행을 올리고, 빠진 피드백 행을 채운다.
+  const lock = LockService.getScriptLock();
+  if (lock.tryLock(10000)) {
+    try { repairFeedbackSheet_(); } finally { lock.releaseLock(); }
+  }
   const stages = getStages_();
   const rubric = getRubric_();
   const maxTotal = rubric.reduce((a, r) => a + r.max, 0);

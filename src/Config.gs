@@ -104,6 +104,62 @@ function writeCells_(sh, row, map, data) {
   });
 }
 
+/** col 열에 값이 있는 마지막 행 번호 (머리글만 있으면 1) */
+function lastDataRow_(sh, col) {
+  const n = sh.getLastRow();
+  if (n < 2 || !col) return Math.max(n, 1);
+  const vals = sh.getRange(2, col, n - 1, 1).getValues();
+  for (let i = vals.length - 1; i >= 0; i--) if (vals[i][0] !== '' && vals[i][0] !== null) return i + 2;
+  return 1;
+}
+
+/**
+ * 피드백 시트 정리
+ * 1) 접수번호가 없는 줄(예전 버전이 미리 깔아 둔 빈 체크박스 줄)을 지워 실제 행을 위로 올린다.
+ * 2) 제출 시트에는 있는데 피드백 시트에 없는 제출을 자동으로 채운다.
+ * 결과: {removed, added}
+ */
+function repairFeedbackSheet_() {
+  const sh = sheet_(SHEET.FEEDBACK);
+  const map = headerMap_(sh);
+  const col = map['접수번호'];
+  let removed = 0, added = 0;
+  if (col && sh.getLastRow() >= 2) {
+    const ids = sh.getRange(2, col, sh.getLastRow() - 1, 1).getValues().map(r => String(r[0] == null ? '' : r[0]).trim());
+    const hasData = ids.some(Boolean);
+    if (!hasData) {
+      sh.getRange(2, 1, sh.getMaxRows() - 1, sh.getLastColumn()).clearContent().clearDataValidations();
+      removed = ids.length;
+    } else {
+      // 아래에서부터 연속된 빈 줄 묶음을 지운다.
+      let i = ids.length - 1;
+      while (i >= 0) {
+        if (ids[i]) { i--; continue; }
+        let j = i;
+        while (j - 1 >= 0 && !ids[j - 1]) j--;
+        sh.deleteRows(j + 2, i - j + 1);
+        removed += i - j + 1;
+        i = j - 1;
+      }
+    }
+  }
+  // 빠진 피드백 행 채우기
+  const have = new Set(readRows_(sh).map(r => String(r['접수번호'])).filter(Boolean));
+  const stages = getStages_();
+  readRows_(sheet_(SHEET.SUBMIT)).forEach(r => {
+    const rc = String(r['접수번호'] || '');
+    if (!rc || have.has(rc)) return;
+    const stage = stages.find(st => st.id === String(r['단계ID'])) || { id: String(r['단계ID']), name: String(r['단계명']) };
+    addFeedbackRow_({
+      receipt: rc, id: normId_(r['학번']), name: normName_(r['이름']), stage, now: r['제출시각'],
+      fileName: r['파일명'], fileUrl: r['파일링크'], did: r['이번 단계에서 한 일'], question: r['어려웠던 점·질문'],
+      attempt: Number(r['제출차수']) || 1,
+    });
+    added++;
+  });
+  return { removed, added };
+}
+
 // ───────────────────────── 설정 읽기 ─────────────────────────
 
 function getSettings_() {
