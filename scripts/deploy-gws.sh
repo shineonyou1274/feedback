@@ -172,7 +172,7 @@ cmd_push() {
   local sid; sid=$(state_get scriptId)
   [ -n "$sid" ] || { red "scriptId가 없습니다. 먼저 init을 실행하세요."; exit 1; }
   step "코드 올리기 (src → $sid)"
-  run_gws script +push --script "$sid" --dir "$SRC" >/dev/null || exit 1
+  (cd "$ROOT" && run_gws script +push --script "$sid" --dir src >/dev/null) || exit 1
   green "  올렸습니다."
 }
 

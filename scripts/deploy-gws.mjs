@@ -44,7 +44,8 @@ function findGws() {
 const GWS = findGws();
 
 function gwsRaw(args) {
-  const r = spawnSync(GWS.cmd, [...GWS.pre, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  // 저장소 폴더에서 실행한다 (gws script +push의 --dir은 상대 경로만 받는다).
+  const r = spawnSync(GWS.cmd, [...GWS.pre, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, cwd: ROOT });
   return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
 }
 
@@ -174,7 +175,7 @@ function push() {
   const sid = loadState().scriptId;
   if (!sid) { red('scriptId가 없습니다. 먼저 init을 실행하세요.'); stop(); }
   step(`코드 올리기 (src → ${sid})`);
-  gws(['script', '+push', '--script', sid, '--dir', SRC]);
+  gws(['script', '+push', '--script', sid, '--dir', 'src']);
   green('  올렸습니다.');
 }
 
