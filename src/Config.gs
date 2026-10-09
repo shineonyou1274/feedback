@@ -198,3 +198,16 @@ function levelOf_(score, max) {
   if (r >= 0.5) return '중';
   return '하';
 }
+
+/**
+ * 시트 메뉴에서만 실행되게 막는다.
+ * 이름 끝에 _가 없는 함수는 웹앱 화면에서 google.script.run으로 부를 수 있으므로,
+ * 메뉴 함수는 맨 처음에 이것을 불러 웹앱(학생 화면)에서 실행되지 않게 한다.
+ */
+function uiOnly_() {
+  try {
+    SpreadsheetApp.getUi();
+  } catch (e) {
+    throw new Error('시트 메뉴에서만 실행할 수 있습니다.');
+  }
+}

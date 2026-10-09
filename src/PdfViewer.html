@@ -1,0 +1,84 @@
+<script>
+/* 학생 화면과 관리 화면이 함께 쓰는 PDF 보기 (pdf.js) — PdfView.open({fileName, data(base64)}, '제목') */
+window.PdfView = (function () {
+  'use strict';
+  var BASE = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+  var ready = null, modal = null;
+
+  function load() {
+    if (ready) return ready;
+    ready = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = BASE + 'pdf.min.js';
+      s.onload = function () {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = BASE + 'pdf.worker.min.js';
+        resolve(window.pdfjsLib);
+      };
+      s.onerror = function () { ready = null; reject(new Error('문서 보기 도구를 불러오지 못했습니다. 인터넷 연결을 확인하세요.')); };
+      document.head.appendChild(s);
+    });
+    return ready;
+  }
+
+  function ensureModal() {
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.hidden = true;
+    modal.innerHTML =
+      '<div class="sheet wide">' +
+      '  <div class="pdf-bar"><b class="pdf-title"></b><span class="grow"></span>' +
+      '    <a class="btn small pdf-save" download>저장</a>' +
+      '    <button type="button" class="btn small pdf-close">닫기</button></div>' +
+      '  <div class="pdf-pages"></div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    modal.querySelector('.pdf-close').addEventListener('click', close);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !modal.hidden) close(); });
+    return modal;
+  }
+
+  function close() {
+    if (!modal) return;
+    modal.hidden = true;
+    modal.querySelector('.pdf-pages').innerHTML = '';
+  }
+
+  /** file: {fileName, data} — 반환: Promise (첫 쪽을 그리면 끝남) */
+  function open(file, title) {
+    var m = ensureModal();
+    return load().then(function (lib) {
+      m.querySelector('.pdf-title').textContent = title || file.fileName || 'PDF';
+      var save = m.querySelector('.pdf-save');
+      save.href = 'data:application/pdf;base64,' + file.data;
+      save.setAttribute('download', file.fileName || 'feedback.pdf');
+      var bin = atob(file.data), bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return lib.getDocument({ data: bytes, cMapUrl: BASE + 'cmaps/', cMapPacked: true }).promise;
+    }).then(function (pdf) {
+      var box = m.querySelector('.pdf-pages');
+      box.innerHTML = '';
+      m.hidden = false;
+      var chain = Promise.resolve();
+      for (var n = 1; n <= pdf.numPages; n++) {
+        (function (n) {
+          chain = chain.then(function () { return pdf.getPage(n); }).then(function (page) {
+            var ratio = Math.min(window.devicePixelRatio || 1, 2);
+            var width = Math.min(box.clientWidth || 800, 860);
+            var vp1 = page.getViewport({ scale: 1 });
+            var vp = page.getViewport({ scale: width / vp1.width * ratio });
+            var c = document.createElement('canvas');
+            c.width = vp.width; c.height = vp.height;
+            box.appendChild(c);
+            return page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+          });
+        })(n);
+      }
+      return chain;
+    });
+  }
+
+  return { open: open, close: close };
+})();
+</script>

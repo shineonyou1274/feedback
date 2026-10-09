@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+  <?!= include('Stylesheet'); ?>
+  <?!= include('AdminStyle'); ?>
+</head>
+<body class="admin" data-base="<?= baseUrl ?>">
+  <header class="top wide-top">
+    <div class="logo">🍌</div>
+    <div>
+      <div class="course" id="aCourse">선생님 관리 화면</div>
+      <h1 id="aTitle">과제 피드백 관리</h1>
+    </div>
+    <span class="grow"></span>
+    <a class="btn small" href="<?= baseUrl ?>" target="_blank" rel="noopener">학생 화면 ↗</a>
+    <button class="btn small" id="btnLogout" hidden>로그아웃</button>
+  </header>
+
+  <!-- 로그인 -->
+  <main id="loginView" class="narrow">
+    <form class="card" id="loginForm">
+      <h2>선생님 로그인</h2>
+      <p id="loginHint" class="muted">관리자 비밀번호를 넣으세요.</p>
+      <label>비밀번호<input type="password" id="pw" autocomplete="current-password" required></label>
+      <div class="err" id="loginErr" role="alert"></div>
+      <button class="btn primary big-btn" type="submit">들어가기</button>
+    </form>
+  </main>
+
+  <!-- 관리 -->
+  <div id="appView" hidden>
+    <nav class="tabs wide-tabs" role="tablist">
+      <button class="tab on" data-tab="list"><span class="ic">📋</span> 제출 현황</button>
+      <button class="tab" data-tab="edit"><span class="ic">✏️</span> 피드백 작성</button>
+      <button class="tab" data-tab="config"><span class="ic">⚙️</span> 과제 설정</button>
+      <button class="tab" data-tab="tools"><span class="ic">👥</span> 명단·도구</button>
+    </nav>
+
+    <main class="wide">
+      <!-- 제출 현황 -->
+      <section id="tab-list" class="panel">
+        <div class="tiles" id="tiles"></div>
+
+        <div class="card">
+          <div class="filters">
+            <select id="fStage"><option value="">모든 단계</option></select>
+            <select id="fStatus"><option value="">모든 상태</option></select>
+            <input id="fSearch" placeholder="학번·이름 찾기">
+            <label class="chk"><input type="checkbox" id="fLatest" checked> 단계마다 최신 제출만</label>
+            <button class="btn small" id="btnRefresh">새로 고침</button>
+          </div>
+
+          <div class="bulk">
+            <span id="selInfo">0명 선택</span>
+            <button class="btn small" data-bulk="draft">🤖 AI 초안</button>
+            <button class="btn small" data-bulk="confirm">확정</button>
+            <button class="btn small" data-bulk="pdf">📄 PDF 만들기</button>
+            <span class="pub">
+              <input type="date" id="bulkDate" title="공개일 (비우면 바로 공개)">
+              <button class="btn small primary" data-bulk="publish">공개</button>
+            </span>
+            <button class="btn small" data-bulk="unpublish">공개 취소</button>
+            <span class="grow"></span>
+            <button class="btn small" id="btnDraftPending">미작성 전체 AI 초안</button>
+            <button class="btn small" id="btnMail">📬 도착 메일 보내기</button>
+          </div>
+
+          <div class="table-wrap">
+            <table class="t list" id="listTable">
+              <thead><tr>
+                <th><input type="checkbox" id="checkAll" aria-label="모두 선택"></th>
+                <th>학번</th><th>이름</th><th>단계</th><th>제출 시각</th><th>상태</th><th>예상</th><th>공개</th><th></th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="muted empty" id="listEmpty" hidden>조건에 맞는 제출이 없습니다.</p>
+        </div>
+
+        <div class="card" id="missingCard" hidden>
+          <h2>아직 내지 않은 학생</h2>
+          <div id="missing"></div>
+        </div>
+      </section>
+
+      <!-- 피드백 작성 -->
+      <section id="tab-edit" class="panel" hidden>
+        <div class="card" id="editEmpty"><p class="muted">제출 현황에서 학생을 고르세요.</p></div>
+        <div id="editor" hidden>
+          <div class="editor-nav">
+            <button class="btn small" id="btnPrev">◀ 이전</button>
+            <div class="who" id="edWho"></div>
+            <button class="btn small" id="btnNext">다음 ▶</button>
+          </div>
+          <div class="split">
+            <div class="col">
+              <div class="card">
+                <h2>제출 내용</h2>
+                <div id="edSubmission"></div>
+              </div>
+              <div class="card" id="edHistoryCard">
+                <h2>이전 단계 기록</h2>
+                <div id="edHistory"></div>
+              </div>
+            </div>
+            <div class="col">
+              <form class="card" id="fbForm" autocomplete="off">
+                <div class="row-between">
+                  <h2>예상 점수</h2>
+                  <button type="button" class="btn small" id="btnAi">🤖 AI 초안</button>
+                </div>
+                <p class="muted small-text">지금 상태로 최종 제출하면 받을 점수를 넣습니다.</p>
+                <div id="edScores"></div>
+                <div class="total-line">합계 <b id="edTotal">-</b> / <span id="edMax">-</span></div>
+                <details class="ai-note" id="edNoteWrap" hidden><summary>AI 점수 근거</summary><pre id="edNote"></pre></details>
+
+                <h2>선생님 의견</h2>
+                <label>잘한 점<textarea id="edStrengths" rows="4"></textarea></label>
+                <label>보완할 점<textarea id="edImprovements" rows="4"></textarea></label>
+                <label>다음 단계까지 할 일<textarea id="edNext" rows="4" placeholder="1. …&#10;2. …"></textarea></label>
+                <label>한 줄 총평<input id="edSummary" maxlength="200"></label>
+
+                <div class="row3">
+                  <label>상태<select id="edStatus"></select></label>
+                  <label>공개일<input type="date" id="edRelease"></label>
+                  <label class="chk big-chk"><input type="checkbox" id="edPublished"> 학생에게 공개</label>
+                </div>
+                <p class="muted small-text" id="edMeta"></p>
+                <div class="err" id="edErr" role="alert"></div>
+                <div class="btn-row">
+                  <button type="submit" class="btn">저장</button>
+                  <button type="button" class="btn primary" id="btnSaveConfirm">저장하고 확정</button>
+                  <button type="button" class="btn" id="btnPdf">📄 PDF 만들기</button>
+                  <button type="button" class="btn" id="btnPdfView" hidden>PDF 보기</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 과제 설정 -->
+      <section id="tab-config" class="panel" hidden>
+        <div class="card">
+          <h2>과제 정보</h2>
+          <div id="cfgSettings" class="grid2"></div>
+        </div>
+        <div class="card">
+          <div class="row-between"><h2>단계</h2><button class="btn small" id="btnAddStage">+ 단계 추가</button></div>
+          <p class="muted small-text">학생은 단계마다 결과물과 과정 기록을 냅니다. 이미 제출이 있는 단계는 지울 수 없으니 "열림"을 끄세요.</p>
+          <div id="cfgStages"></div>
+        </div>
+        <div class="card">
+          <div class="row-between"><h2>루브릭 (최종 평가 기준)</h2><button class="btn small" id="btnAddRubric">+ 항목 추가</button></div>
+          <p class="muted small-text">항목 이름을 바꾸면 피드백 시트에 새 점수 열이 생깁니다. 이미 매긴 점수는 예전 열에 남습니다.</p>
+          <div id="cfgRubric"></div>
+          <div class="total-line">배점 합계 <b id="rubricTotal">0</b><span id="rubricWarn" class="muted"></span></div>
+        </div>
+        <div class="sticky-save">
+          <div class="err" id="cfgErr" role="alert"></div>
+          <button class="btn primary" id="btnSaveConfig">설정 저장</button>
+        </div>
+      </section>
+
+      <!-- 명단·도구 -->
+      <section id="tab-tools" class="panel" hidden>
+        <div class="card">
+          <h2>학생 명단</h2>
+          <p class="muted small-text">한 줄에 "학번 이름 이메일" 순서로 넣습니다. 스프레드시트에서 세 열을 복사해 붙여 넣어도 됩니다. 이메일은 비워도 됩니다.</p>
+          <textarea id="rosterText" rows="10" placeholder="1101 홍길동 hong@school.kr"></textarea>
+          <div class="row-between"><span class="muted" id="rosterInfo"></span><button class="btn primary small" id="btnSaveRoster">명단 저장</button></div>
+        </div>
+        <div class="card">
+          <h2>메일</h2>
+          <label class="chk big-chk"><input type="checkbox" id="dailyToggle"> 매일 아침 8시쯤 공개일이 된 피드백의 도착 메일 자동 발송</label>
+          <p class="muted small-text">제출 완료 메일과 메일 제목은 "과제 설정"에서 바꿉니다.</p>
+        </div>
+        <div class="card">
+          <h2>AI 초안</h2>
+          <p class="muted small-text" id="apiInfo"></p>
+          <div class="row-inline">
+            <input type="password" id="apiKey" placeholder="새 Claude API 키 (sk-ant-…)" autocomplete="off">
+            <button class="btn small" id="btnApiKey">저장</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2>관리자 비밀번호 바꾸기</h2>
+          <div class="grid2">
+            <label>지금 비밀번호<input type="password" id="pwOld" autocomplete="current-password"></label>
+            <label>새 비밀번호 (6자 이상)<input type="password" id="pwNew" autocomplete="new-password"></label>
+          </div>
+          <button class="btn small" id="btnPw">바꾸기</button>
+        </div>
+        <div class="card">
+          <h2>주소</h2>
+          <p>학생: <code id="urlStudent"></code></p>
+          <p>선생님: <code id="urlAdmin"></code></p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+  <div class="loading" id="loading" hidden>
+    <div class="bounce">🍌</div>
+    <div id="loadingText">잠시만요…</div>
+  </div>
+  <footer>© shiny-peace</footer>
+
+  <?!= include('PdfViewer'); ?>
+  <?!= include('AdminJs'); ?>
+</body>
+</html>

@@ -19,6 +19,7 @@ function onOpen() {
     .addItem('⑤ 선택한 행: 공개 취소', 'menuUnpublishSelected')
     .addItem('피드백 도착 메일 지금 보내기', 'menuSendArrivalMails')
     .addSeparator()
+    .addItem('⚙️ 관리자 비밀번호 정하기 (웹 관리 화면)', 'menuSetAdminPassword')
     .addItem('⚙️ AI API 키 등록', 'menuSetApiKey')
     .addItem('⚙️ 매일 아침 도착 메일 자동 발송 켜기', 'installDailyTrigger')
     .addToUi();
@@ -27,6 +28,7 @@ function onOpen() {
 // ───────────────────────── 처음 설정 ─────────────────────────
 
 function setupAll() {
+  uiOnly_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', ss.getId());
 
@@ -40,13 +42,15 @@ function setupAll() {
   ensureFolders_();
   styleSheets_();
 
+  if (!hasAdminPassword_()) menuSetAdminPassword();
+
   SpreadsheetApp.getUi().alert(
     '처음 설정을 마쳤습니다.\n\n' +
-    '1) 설정·단계·루브릭·명단 시트를 우리 반에 맞게 고치세요.\n' +
-    '2) 확장 프로그램 > Apps Script > 배포 > 새 배포 > 웹 앱으로 배포하세요.\n' +
+    '1) 확장 프로그램 > Apps Script > 배포 > 새 배포 > 웹 앱으로 배포하세요.\n' +
     '   (실행: 나, 액세스: 모든 사용자)\n' +
-    '3) 배포 주소를 설정 시트의 "웹앱 주소"에 붙여 넣으세요.\n' +
-    '4) AI 초안을 쓰려면 메뉴의 "AI API 키 등록"을 실행하세요.');
+    '2) 학생에게는 웹앱 주소를 그대로 알려 주세요. 제출과 피드백 확인을 모두 이 주소에서 합니다.\n' +
+    '3) 이제부터는 웹앱 주소 끝에 ?page=admin 을 붙인 관리 화면에서 모두 할 수 있습니다.\n' +
+    '   (과제 설정, 명단, 제출 현황, AI 초안, 피드백 작성, PDF, 공개, 메일)');
 }
 
 function ensureSheet_(name, headers, rows) {
@@ -135,6 +139,7 @@ function getOrCreateFolder_(parent, name) {
 
 /** 루브릭 항목마다 '예상:항목' 열이 피드백 시트에 있도록 맞춘다. 이미 있는 열은 지우지 않는다. */
 function syncFeedbackColumns(silent) {
+  if (silent !== true) uiOnly_();
   const sh = sheet_(SHEET.FEEDBACK);
   const rubric = getRubric_();
   let map = headerMap_(sh);
@@ -196,6 +201,7 @@ function styleFeedbackSheet_(sh) {
 // ───────────────────────── 트리거 ─────────────────────────
 
 function installDailyTrigger() {
+  uiOnly_();
   ScriptApp.getProjectTriggers()
     .filter(t => t.getHandlerFunction() === 'dailyArrivalJob')
     .forEach(t => ScriptApp.deleteTrigger(t));
@@ -237,6 +243,7 @@ function recalcTotal_(sh, m, row) {
 }
 
 function menuSetApiKey() {
+  uiOnly_();
   const ui = SpreadsheetApp.getUi();
   const res = ui.prompt('Claude API 키 등록', 'console.anthropic.com 에서 발급한 키를 붙여 넣으세요.\n(스크립트 속성에만 저장되고 시트에는 남지 않습니다.)', ui.ButtonSet.OK_CANCEL);
   if (res.getSelectedButton() !== ui.Button.OK) return;

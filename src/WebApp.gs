@@ -2,10 +2,14 @@
  * 학생용 웹앱: 과제 제출, 제출 확인, 피드백 PDF 보기
  */
 
-function doGet() {
-  const t = HtmlService.createTemplateFromFile('Index');
+function doGet(e) {
+  const isAdmin = e && e.parameter && e.parameter.page === 'admin';
+  const t = HtmlService.createTemplateFromFile(isAdmin ? 'Admin' : 'Index');
+  let url = '';
+  try { url = ScriptApp.getService().getUrl() || ''; } catch (err) { /* 배포 전 */ }
+  t.baseUrl = url;
   let title = '과제 제출·피드백';
-  try { title = `${getSettings_()[KEY.TITLE]} · 제출과 피드백`; } catch (e) { /* 설정 전 */ }
+  try { title = `${getSettings_()[KEY.TITLE]} · ${isAdmin ? '선생님 관리' : '제출과 피드백'}`; } catch (err) { /* 설정 전 */ }
   return t.evaluate()
     .setTitle(title)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')

@@ -1,0 +1,662 @@
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var BASE = document.body.getAttribute('data-base') || '';
+  var TOKEN_KEY = 'fb-admin-token';
+  var token = store(function () { return sessionStorage.getItem(TOKEN_KEY); }) || '';
+  var DASH = null;           // 제출 현황 데이터
+  var view = [];             // 지금 표에 보이는 행 (편집기의 이전/다음 순서)
+  var selected = new Set();  // 고른 접수번호
+  var cur = null;            // 편집 중인 항목
+  var dirty = false;
+  var CFG = null;            // 과제 설정
+  var STATUS_CLASS = { '미작성': 's-new', 'AI 초안': 's-draft', '확정': 's-done', 'PDF 완료': 's-pdf' };
+
+  function store(fn) { try { return fn(); } catch (e) { return null; } }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function loading(on, text) { $('loading').hidden = !on; $('loadingText').textContent = text || '잠시만요…'; }
+  var toastTimer = null;
+  function toast(msg) {
+    var t = $('toast'); t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, 3500);
+  }
+  function call(fn) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function (resolve, reject) {
+      var r = google.script.run.withSuccessHandler(resolve).withFailureHandler(function (e) {
+        var msg = (e && e.message ? e.message : String(e)).replace(/^(Exception|Error):\s*/, '');
+        if (/로그인이 끝났습니다/.test(msg)) showLogin(msg);
+        reject(new Error(msg));
+      });
+      r[fn].apply(r, args);
+    });
+  }
+  function admin(fn) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return call.apply(null, [fn, token].concat(args));
+  }
+  function fail(e) { loading(false); toast('⚠️ ' + e.message); }
+
+  // ───────── 로그인 ─────────
+  function showLogin(msg) {
+    token = '';
+    store(function () { sessionStorage.removeItem(TOKEN_KEY); });
+    $('appView').hidden = true;
+    $('loginView').hidden = false;
+    $('btnLogout').hidden = true;
+    loading(false);
+    if (msg) $('loginErr').textContent = msg;
+  }
+  function showApp() {
+    $('loginView').hidden = true;
+    $('appView').hidden = false;
+    $('btnLogout').hidden = false;
+    loadDashboard();
+  }
+
+  $('loginForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    $('loginErr').textContent = '';
+    loading(true, '확인하는 중…');
+    call('adminLogin', $('pw').value).then(function (r) {
+      token = r.token;
+      store(function () { sessionStorage.setItem(TOKEN_KEY, token); });
+      $('pw').value = '';
+      loading(false);
+      showApp();
+    }).catch(function (e) { loading(false); $('loginErr').textContent = e.message; });
+  });
+  $('btnLogout').addEventListener('click', function () {
+    if (dirty && !confirm('저장하지 않은 의견이 있습니다. 나갈까요?')) return;
+    call('adminLogout', token).finally(function () { showLogin(''); });
+  });
+
+  call('adminStatus').then(function (s) {
+    if (!s.hasPassword) {
+      $('loginHint').textContent = '아직 관리자 비밀번호가 없습니다. 구글 시트를 열고 "📮 과제 피드백 > 관리자 비밀번호 정하기"를 먼저 실행하세요.';
+    }
+  });
+  if (token) showApp();
+
+  // ───────── 탭 ─────────
+  document.querySelectorAll('.tab').forEach(function (b) {
+    b.addEventListener('click', function () { showTab(b.dataset.tab); });
+  });
+  function showTab(name) {
+    if (name !== 'edit' && dirty && !confirm('저장하지 않은 의견이 있습니다. 다른 화면으로 갈까요?')) return;
+    if (name !== 'edit') dirty = false;
+    document.querySelectorAll('.tab').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === name); });
+    ['list', 'edit', 'config', 'tools'].forEach(function (t) { $('tab-' + t).hidden = t !== name; });
+    if (name === 'list' && DASH) renderList();
+    if ((name === 'config' || name === 'tools') && !CFG) loadConfig();
+    window.scrollTo(0, 0);
+  }
+  window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+  // ───────── 제출 현황 ─────────
+  function loadDashboard() {
+    loading(true, '제출 현황을 불러오는 중…');
+    return admin('adminDashboard').then(function (d) {
+      DASH = d;
+      $('aCourse').textContent = d.course + ' · 선생님 관리';
+      $('aTitle').textContent = d.title;
+      var fs = $('fStage'), keep = fs.value;
+      fs.innerHTML = '<option value="">모든 단계</option>' + d.stages.map(function (s) {
+        return '<option value="' + esc(s.id) + '">' + esc(s.name) + '</option>';
+      }).join('');
+      fs.value = keep;
+      var st = $('fStatus'), keep2 = st.value;
+      st.innerHTML = '<option value="">모든 상태</option><option value="__unpub">공개 전 (PDF 완료)</option>' +
+        d.statuses.map(function (s) { return '<option>' + esc(s) + '</option>'; }).join('');
+      st.value = keep2;
+      $('btnDraftPending').disabled = !d.hasApiKey;
+      $('btnDraftPending').title = d.hasApiKey ? '' : '명단·도구에서 AI API 키를 먼저 넣으세요.';
+      renderTiles();
+      renderList();
+      loading(false);
+    }).catch(fail);
+  }
+
+  function renderTiles() {
+    var stage = $('fStage').value;
+    $('tiles').innerHTML = DASH.stages.map(function (s) {
+      var rows = latestOnly(DASH.rows.filter(function (r) { return r.stageId === s.id; }));
+      var todo = rows.filter(function (r) { return r.status === '미작성' || r.status === 'AI 초안'; }).length;
+      var vis = rows.filter(function (r) { return r.visible; }).length;
+      return '<button type="button" class="tile' + (stage === s.id ? ' on' : '') + '" data-stage="' + esc(s.id) + '">' +
+        '<div class="nm">' + esc(s.name) + (s.open ? '' : ' <small>(닫힘)</small>') + '</div>' +
+        '<div class="big">' + rows.length + (DASH.rosterCount ? '<small> / ' + DASH.rosterCount + '명</small>' : '명') + '</div>' +
+        '<div class="sub">피드백 할 것 ' + todo + ' · 공개됨 ' + vis + (s.deadlineText ? ' · 마감 ' + esc(s.deadlineText) : '') + '</div></button>';
+    }).join('');
+    $('tiles').querySelectorAll('.tile').forEach(function (t) {
+      t.addEventListener('click', function () {
+        $('fStage').value = $('fStage').value === t.dataset.stage ? '' : t.dataset.stage;
+        renderTiles(); renderList();
+      });
+    });
+  }
+
+  /** 같은 학생·같은 단계는 최신 제출 하나만 */
+  function latestOnly(rows) {
+    var seen = {};
+    return rows.filter(function (r) {
+      var k = r.id + '|' + r.stageId;
+      if (seen[k]) return false;
+      seen[k] = true;
+      return true;
+    });
+  }
+
+  function renderList() {
+    var stage = $('fStage').value, status = $('fStatus').value, q = $('fSearch').value.trim();
+    var rows = DASH.rows.slice();
+    if ($('fLatest').checked) rows = latestOnly(rows);
+    view = rows.filter(function (r) {
+      if (stage && r.stageId !== stage) return false;
+      if (status === '__unpub') { if (!(r.hasPdf && !r.published)) return false; }
+      else if (status && r.status !== status) return false;
+      if (q && (r.id + ' ' + r.name).indexOf(q) < 0) return false;
+      return true;
+    });
+    var tb = $('listTable').querySelector('tbody');
+    tb.innerHTML = view.map(function (r) {
+      var vis = r.visible ? '<span class="vis-on">보임</span>'
+        : r.published ? '<span class="vis-wait">' + esc(r.releaseDate) + ' 예약</span>' : '-';
+      return '<tr data-r="' + esc(r.receipt) + '"' + (selected.has(r.receipt) ? ' class="sel"' : '') + '>' +
+        '<td><input type="checkbox" class="pick"' + (selected.has(r.receipt) ? ' checked' : '') + ' aria-label="고르기"></td>' +
+        '<td>' + esc(r.id) + '</td><td><b>' + esc(r.name) + '</b></td><td>' + esc(r.stageName) + '</td>' +
+        '<td>' + esc(r.time) + (r.late ? '<span class="tag">늦음</span>' : '') + (r.attempt > 1 ? '<span class="tag n">' + r.attempt + '차</span>' : '') + '</td>' +
+        '<td><span class="chip ' + (STATUS_CLASS[r.status] || '') + '">' + esc(r.status) + '</span></td>' +
+        '<td>' + (r.total === '' || r.total == null ? '-' : esc(r.total)) + '</td>' +
+        '<td>' + vis + (r.arrivalMailed ? ' 📧' : '') + '</td>' +
+        '<td><button type="button" class="btn small open">작성</button></td></tr>';
+    }).join('');
+    $('listEmpty').hidden = view.length > 0;
+    tb.querySelectorAll('tr').forEach(function (tr) {
+      var rc = tr.dataset.r;
+      tr.querySelector('.pick').addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (e.target.checked) selected.add(rc); else selected.delete(rc);
+        tr.classList.toggle('sel', e.target.checked);
+        updateSel();
+      });
+      tr.addEventListener('click', function () { openItem(rc); });
+    });
+    $('checkAll').checked = view.length > 0 && view.every(function (r) { return selected.has(r.receipt); });
+    updateSel();
+    renderMissing(stage);
+  }
+
+  function updateSel() { $('selInfo').textContent = selected.size + '명 선택'; }
+
+  function renderMissing(stage) {
+    var list = stage && DASH.missing[stage];
+    if (!stage || !DASH.rosterCount) { $('missingCard').hidden = true; return; }
+    $('missingCard').hidden = false;
+    $('missing').innerHTML = list.length
+      ? list.map(function (p) { return '<span class="miss">' + esc(p.id) + ' ' + esc(p.name) + '</span>'; }).join('')
+      : '<p class="muted">모두 냈습니다 🎉</p>';
+  }
+
+  ['fStage', 'fStatus', 'fLatest'].forEach(function (id) {
+    $(id).addEventListener('change', function () { renderTiles(); renderList(); });
+  });
+  $('fSearch').addEventListener('input', renderList);
+  $('btnRefresh').addEventListener('click', loadDashboard);
+  $('checkAll').addEventListener('change', function (e) {
+    view.forEach(function (r) { if (e.target.checked) selected.add(r.receipt); else selected.delete(r.receipt); });
+    renderList();
+  });
+
+  // 일괄 작업
+  document.querySelectorAll('[data-bulk]').forEach(function (b) {
+    b.addEventListener('click', function () { bulk(b.dataset.bulk); });
+  });
+  function bulk(kind) {
+    var ids = Array.from(selected);
+    if (!ids.length) { toast('먼저 학생을 고르세요.'); return; }
+    if (kind === 'draft') return bulkDraft(ids);
+    if (kind === 'confirm') {
+      loading(true, '확정하는 중…');
+      return admin('adminSetStatus', ids, '확정').then(function (r) { toast(r.count + '건을 확정했습니다.'); afterBulk(); }).catch(fail);
+    }
+    if (kind === 'pdf') return runPdf(ids);
+    if (kind === 'publish') {
+      var d = $('bulkDate').value;
+      loading(true, '공개하는 중…');
+      return admin('adminPublish', ids, true, d).then(function (r) {
+        toast(r.count + '건을 ' + (d ? d + '부터 ' : '지금 ') + '공개합니다.' + (r.noPdf.length ? '\nPDF가 없어 건너뜀: ' + r.noPdf.join(', ') : ''));
+        afterBulk();
+      }).catch(fail);
+    }
+    if (kind === 'unpublish') {
+      loading(true, '공개를 거두는 중…');
+      return admin('adminPublish', ids, false).then(function (r) { toast(r.count + '건의 공개를 거두었습니다.'); afterBulk(); }).catch(fail);
+    }
+  }
+  function afterBulk() { selected.clear(); loadDashboard(); }
+
+  function runPdf(ids, done) {
+    loading(true, 'PDF를 만드는 중… (' + ids.length + '건)');
+    return admin('adminMakePdfs', ids).then(function (r) {
+      var msg = 'PDF ' + r.done + '건을 만들었습니다.';
+      if (r.skipped.length) msg += '\n건너뜀: ' + r.skipped.join(', ');
+      if (r.errors.length) msg += '\n실패: ' + r.errors.join(' / ');
+      if (r.left > 0) {
+        toast(msg + '\n남은 ' + r.left + '건을 이어서 만듭니다.');
+        return runPdf(r.leftReceipts, done);
+      }
+      toast(msg);
+      if (done) return done();
+      afterBulk();
+    }).catch(fail);
+  }
+
+  function bulkDraft(ids) {
+    var i = 0, ok = 0, errs = [];
+    function next() {
+      if (i >= ids.length) {
+        loading(false);
+        toast('AI 초안 ' + ok + '건을 만들었습니다.' + (errs.length ? '\n실패: ' + errs.join(' / ') : ''));
+        afterBulk();
+        return;
+      }
+      var rc = ids[i++];
+      var row = DASH.rows.find(function (r) { return r.receipt === rc; }) || {};
+      loading(true, 'AI 초안 ' + i + ' / ' + ids.length + ' · ' + (row.name || '') + ' (' + (row.stageName || '') + ')');
+      admin('adminAiDraft', rc).then(function () { ok++; next(); })
+        .catch(function (e) { errs.push((row.name || rc) + ': ' + e.message); next(); });
+    }
+    if (ids.some(function (rc) { var r = DASH.rows.find(function (x) { return x.receipt === rc; }); return r && (r.status === '확정' || r.status === 'PDF 완료'); }) &&
+        !confirm('확정했거나 PDF를 만든 학생도 있습니다. AI 초안으로 덮어쓸까요?')) return;
+    next();
+  }
+
+  $('btnDraftPending').addEventListener('click', function () {
+    if (!confirm('미작성 제출 전체에 AI 초안을 만듭니다. 한 건에 1분 안팎이 걸릴 수 있습니다. 시작할까요?')) return;
+    var total = 0;
+    (function round() {
+      loading(true, 'AI 초안 만드는 중… (지금까지 ' + total + '건)');
+      admin('adminAiDraftPending').then(function (r) {
+        total += r.done;
+        if (r.errors.length) toast('실패: ' + r.errors.join(' / '));
+        if (r.left > 0 && r.done > 0) return round();
+        loading(false);
+        toast('AI 초안 ' + total + '건을 만들었습니다.');
+        loadDashboard();
+      }).catch(fail);
+    })();
+  });
+
+  $('btnMail').addEventListener('click', function () {
+    loading(true, '도착 메일을 보내는 중…');
+    admin('adminSendArrivalMails').then(function (r) {
+      loading(false);
+      toast(r.reason ? '보내지 않았습니다: ' + r.reason : '도착 메일 ' + r.sent + '통을 보냈습니다.' + (r.skipped ? ' (이메일 없음·실패 ' + r.skipped + '명)' : ''));
+      loadDashboard();
+    }).catch(fail);
+  });
+
+  // ───────── 피드백 작성 ─────────
+  function openItem(receipt) {
+    if (dirty && cur && cur.receipt !== receipt && !confirm('저장하지 않은 의견이 있습니다. 다른 학생으로 갈까요?')) return;
+    dirty = false;
+    document.querySelectorAll('.tab').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === 'edit'); });
+    ['list', 'edit', 'config', 'tools'].forEach(function (t) { $('tab-' + t).hidden = t !== 'edit'; });
+    loading(true, '제출 내용을 불러오는 중…');
+    admin('adminGetItem', receipt).then(function (it) { renderItem(it); loading(false); window.scrollTo(0, 0); }).catch(fail);
+  }
+
+  function renderItem(it) {
+    cur = it;
+    dirty = false;
+    $('editEmpty').hidden = true;
+    $('editor').hidden = false;
+    var idx = view.findIndex(function (r) { return r.receipt === it.receipt; });
+    $('edWho').textContent = it.id + ' ' + it.name + ' · ' + it.stageName + (idx >= 0 ? '  (' + (idx + 1) + '/' + view.length + ')' : '');
+    $('btnPrev').disabled = idx <= 0;
+    $('btnNext').disabled = idx < 0 || idx >= view.length - 1;
+
+    var file = it.fileName
+      ? esc(it.fileName) + ' ' + (it.filePreviewable ? '<button type="button" class="btn small" id="btnFilePreview">미리 보기</button> ' : '') +
+        (it.fileUrl ? '<a class="btn small" href="' + esc(it.fileUrl) + '" target="_blank" rel="noopener">드라이브에서 열기 ↗</a>' : '')
+      : '(파일 없음)';
+    $('edSubmission').innerHTML =
+      '<dl class="kv2">' +
+      '<dt>제출 시각</dt><dd>' + esc(it.time) + (it.late ? ' <span class="tag">늦음</span>' : '') + (it.attempt > 1 ? ' <span class="tag n">' + it.attempt + '번째 제출</span>' : '') + '</dd>' +
+      '<dt>이번 단계에서 한 일</dt><dd>' + esc(it.did) + '</dd>' +
+      '<dt>어려웠던 점·질문</dt><dd>' + (it.question ? '<b>' + esc(it.question) + '</b>' : '-') + '</dd>' +
+      '<dt>파일</dt><dd>' + file + '</dd>' +
+      (it.email ? '<dt>이메일</dt><dd>' + esc(it.email) + '</dd>' : '') +
+      '</dl>' +
+      (it.body ? '<h3>본문</h3><div class="body-box">' + esc(it.body) + '</div>' : '') +
+      (it.stageFocus ? '<div class="focus-box"><b>이 단계에서 볼 것</b> ' + esc(it.stageFocus) + '</div>' : '');
+    var fp = $('btnFilePreview');
+    if (fp) fp.addEventListener('click', function () {
+      loading(true, '파일을 여는 중…');
+      admin('adminSubmissionPdf', it.receipt).then(function (f) { return PdfView.open(f, it.name + ' · ' + it.fileName); })
+        .then(function () { loading(false); }).catch(fail);
+    });
+
+    $('edHistoryCard').hidden = !it.history.length;
+    $('edHistory').innerHTML = it.history.map(function (h) {
+      return '<div class="hist"><b>' + esc(h.stageName) + '</b> · ' + esc(h.time) + ' · ' + esc(h.status) +
+        (h.total !== '' && h.total != null ? ' · 예상 ' + esc(h.total) + '점' : '') +
+        (h.next ? '<div class="pre"><b>그때 준 할 일</b>\n' + esc(h.next) + '</div>' : '') + '</div>';
+    }).join('');
+
+    $('edScores').innerHTML = it.scores.map(function (s, i) {
+      return '<div class="score-row"><span class="nm">' + esc(s.item) + '</span>' +
+        '<input type="number" min="0" max="' + s.max + '" step="1" inputmode="numeric" data-i="' + i + '" value="' + esc(s.score) + '">' +
+        '<span>/ ' + s.max + '</span>' +
+        ((s.high || s.mid || s.low) ? '<details><summary>수준 기준</summary>' +
+          (s.high ? '<p><b>상</b> ' + esc(s.high) + '</p>' : '') + (s.mid ? '<p><b>중</b> ' + esc(s.mid) + '</p>' : '') +
+          (s.low ? '<p><b>하</b> ' + esc(s.low) + '</p>' : '') + '</details>' : '') + '</div>';
+    }).join('');
+    $('edScores').querySelectorAll('input').forEach(function (inp) {
+      inp.addEventListener('input', function () { dirty = true; calcTotal(); });
+    });
+    $('edMax').textContent = it.scores.reduce(function (a, s) { return a + s.max; }, 0);
+    calcTotal();
+
+    $('edNoteWrap').hidden = !it.scoreNote;
+    $('edNote').textContent = it.scoreNote || '';
+    $('edStrengths').value = it.strengths;
+    $('edImprovements').value = it.improvements;
+    $('edNext').value = it.nextSteps;
+    $('edSummary').value = it.summary;
+    $('edStatus').innerHTML = (DASH ? DASH.statuses : ['미작성', 'AI 초안', '확정', 'PDF 완료']).map(function (s) {
+      return '<option' + (s === it.status ? ' selected' : '') + '>' + esc(s) + '</option>';
+    }).join('');
+    $('edRelease').value = it.releaseDate;
+    $('edPublished').checked = it.published;
+    $('btnPdfView').hidden = !it.pdfUrl;
+    $('edMeta').textContent = [
+      it.aiTime ? 'AI 초안 ' + it.aiTime : '',
+      it.pdfTime ? 'PDF ' + it.pdfTime : '',
+      it.arrivalMailed ? '도착 메일 ' + it.arrivalMailed : '',
+    ].filter(String).join(' · ');
+    $('edErr').textContent = '';
+    $('btnAi').disabled = DASH && !DASH.hasApiKey;
+  }
+
+  function calcTotal() {
+    var sum = 0, any = false, bad = false;
+    $('edScores').querySelectorAll('input').forEach(function (inp) {
+      var max = Number(inp.max), v = inp.value;
+      var wrong = v !== '' && (isNaN(v) || Number(v) < 0 || Number(v) > max);
+      inp.classList.toggle('bad', wrong);
+      if (wrong) bad = true;
+      if (v !== '' && !wrong) { sum += Number(v); any = true; }
+    });
+    $('edTotal').textContent = any ? sum : '-';
+    return !bad;
+  }
+
+  ['edStrengths', 'edImprovements', 'edNext', 'edSummary', 'edStatus', 'edRelease', 'edPublished'].forEach(function (id) {
+    $(id).addEventListener('input', function () { dirty = true; });
+    $(id).addEventListener('change', function () { dirty = true; });
+  });
+
+  function collectFeedback(status) {
+    var scores = {};
+    $('edScores').querySelectorAll('input').forEach(function (inp) {
+      scores[cur.scores[Number(inp.dataset.i)].item] = inp.value === '' ? '' : Number(inp.value);
+    });
+    return {
+      scores: scores,
+      strengths: $('edStrengths').value,
+      improvements: $('edImprovements').value,
+      nextSteps: $('edNext').value,
+      summary: $('edSummary').value,
+      status: status || $('edStatus').value,
+      releaseDate: $('edRelease').value,
+      published: $('edPublished').checked,
+    };
+  }
+
+  function save(status) {
+    if (!calcTotal()) { $('edErr').textContent = '점수는 0부터 배점 사이로 넣으세요.'; return Promise.reject(new Error('점수 범위')); }
+    $('edErr').textContent = '';
+    loading(true, '저장하는 중…');
+    return admin('adminSaveFeedback', cur.receipt, collectFeedback(status)).then(function (it) {
+      loading(false);
+      renderItem(it);
+      syncRow(it);
+      toast('저장했습니다.' + (it.status === '확정' && cur.pdfTime ? ' 내용이 바뀌었으면 PDF를 다시 만드세요.' : ''));
+      return it;
+    }).catch(function (e) { loading(false); $('edErr').textContent = e.message; throw e; });
+  }
+
+  /** 편집 결과를 목록 데이터에도 반영한다. */
+  function syncRow(it) {
+    if (!DASH) return;
+    var r = DASH.rows.find(function (x) { return x.receipt === it.receipt; });
+    if (!r) return;
+    r.status = it.status; r.total = it.total; r.published = it.published; r.releaseDate = it.releaseDate; r.hasPdf = !!it.pdfUrl;
+    r.visible = r.published && r.hasPdf && (!r.releaseDate || new Date(r.releaseDate + 'T00:00:00') <= new Date());
+  }
+
+  $('fbForm').addEventListener('submit', function (e) { e.preventDefault(); save().catch(function () {}); });
+  $('btnSaveConfirm').addEventListener('click', function () {
+    var next = $('edStatus').value === 'PDF 완료' && !dirty ? 'PDF 완료' : '확정';
+    save(next).catch(function () {});
+  });
+  $('btnAi').addEventListener('click', function () {
+    if ((cur.strengths || cur.improvements) && !confirm('지금 의견과 점수를 AI 초안으로 바꿉니다. 계속할까요?')) return;
+    loading(true, 'AI가 제출물과 과정 기록을 읽는 중… (1분 안팎)');
+    admin('adminAiDraft', cur.receipt).then(function (it) {
+      loading(false); renderItem(it); syncRow(it); toast('AI 초안을 채웠습니다. 읽고 고친 뒤 확정하세요.');
+    }).catch(fail);
+  });
+  $('btnPdf').addEventListener('click', function () {
+    var go = function () {
+      runPdf([cur.receipt], function () {
+        return admin('adminGetItem', cur.receipt).then(function (it) { loading(false); renderItem(it); syncRow(it); });
+      });
+    };
+    if (dirty) save('확정').then(go).catch(function () {}); else go();
+  });
+  $('btnPdfView').addEventListener('click', function () {
+    loading(true, 'PDF를 여는 중…');
+    admin('adminFeedbackPdf', cur.receipt).then(function (f) { return PdfView.open(f, cur.name + ' · ' + cur.stageName + ' 피드백'); })
+      .then(function () { loading(false); }).catch(fail);
+  });
+  function step(d) {
+    var idx = view.findIndex(function (r) { return r.receipt === cur.receipt; });
+    var n = view[idx + d];
+    if (n) openItem(n.receipt);
+  }
+  $('btnPrev').addEventListener('click', function () { step(-1); });
+  $('btnNext').addEventListener('click', function () { step(1); });
+
+  // ───────── 과제 설정 ─────────
+  var YES_NO_KEYS = ['명단에 있는 학생만 제출', '제출 완료 메일 보내기', '피드백 도착 메일 보내기'];
+  var LONG_KEYS = ['안내문'];
+  var KEY_HELP = {
+    '웹앱 주소': '메일 속 버튼이 여는 주소입니다. 비우면 지금 배포 주소를 씁니다.',
+    '허용 확장자': '쉼표로 나눕니다. 예: pdf,docx,hwp',
+    '제출 완료 메일 제목': '{이름} {단계명} {과제명} {접수번호} 를 넣을 수 있습니다.',
+    '피드백 도착 메일 제목': '{이름} {단계명} {과제명} 를 넣을 수 있습니다.',
+    'AI 모델': '예: claude-opus-5-5',
+    'AI 생각 깊이': 'low · medium · high (높을수록 꼼꼼하지만 느립니다)',
+  };
+  var YES = /^(y|yes|예|네|사용|true|o)$/i;
+
+  function loadConfig() {
+    loading(true, '설정을 불러오는 중…');
+    return admin('adminGetConfig').then(function (c) { CFG = c; renderConfig(); renderTools(); loading(false); }).catch(fail);
+  }
+
+  function renderConfig() {
+    $('cfgSettings').innerHTML = CFG.keys.map(function (k) {
+      var v = CFG.settings[k];
+      var help = KEY_HELP[k] ? '<span class="muted small-text"> ' + esc(KEY_HELP[k]) + '</span>' : '';
+      var field;
+      if (YES_NO_KEYS.indexOf(k) >= 0) {
+        var on = YES.test(String(v).trim()) || v === true;
+        field = '<select data-key="' + esc(k) + '"><option' + (on ? ' selected' : '') + '>예</option><option' + (on ? '' : ' selected') + '>아니오</option></select>';
+      } else if (k === 'AI 생각 깊이') {
+        field = '<select data-key="' + esc(k) + '">' + ['low', 'medium', 'high'].map(function (x) {
+          return '<option' + (String(v) === x ? ' selected' : '') + '>' + x + '</option>';
+        }).join('') + '</select>';
+      } else if (LONG_KEYS.indexOf(k) >= 0) {
+        field = '<textarea data-key="' + esc(k) + '" rows="4">' + esc(v) + '</textarea>';
+      } else {
+        field = '<input data-key="' + esc(k) + '" value="' + esc(v) + '"' + (k === '파일 최대 크기(MB)' ? ' type="number" min="1" max="25"' : '') + '>';
+      }
+      return '<label class="' + (LONG_KEYS.indexOf(k) >= 0 ? 'full' : '') + '">' + esc(k) + help + field + '</label>';
+    }).join('');
+    renderStages();
+    renderRubric();
+  }
+
+  function renderStages() {
+    $('cfgStages').innerHTML = CFG.stages.map(function (s, i) {
+      return '<div class="stage-edit" data-i="' + i + '">' +
+        '<div class="hd"><span class="num">' + (i + 1) + '</span><input data-f="name" value="' + esc(s.name) + '" placeholder="단계 이름">' +
+        '<button type="button" class="icon-btn" data-act="up"' + (i === 0 ? ' disabled' : '') + ' title="위로">↑</button>' +
+        '<button type="button" class="icon-btn" data-act="down"' + (i === CFG.stages.length - 1 ? ' disabled' : '') + ' title="아래로">↓</button>' +
+        '<button type="button" class="icon-btn" data-act="del"' + (s.used ? ' disabled title="제출이 있어 지울 수 없습니다"' : ' title="지우기"') + '>✕</button></div>' +
+        '<div class="stage-grid">' +
+        '<label>학생 안내<textarea data-f="desc" rows="3">' + esc(s.desc) + '</textarea></label>' +
+        '<label>피드백 초점 <span class="opt">(AI와 선생님이 이 단계에서 볼 것)</span><textarea data-f="focus" rows="3">' + esc(s.focus) + '</textarea></label>' +
+        '<label>마감일시<input type="datetime-local" data-f="deadline" value="' + esc(s.deadline) + '"></label>' +
+        '<label>제출 방식<select data-f="mode">' + ['파일+글', '파일', '글'].map(function (m) {
+          return '<option' + (s.mode === m ? ' selected' : '') + '>' + m + '</option>';
+        }).join('') + '</select></label>' +
+        '<div class="opts"><label class="chk"><input type="checkbox" data-f="open"' + (s.open ? ' checked' : '') + '> 열림 (학생이 낼 수 있음)</label>' +
+        '<label class="chk"><input type="checkbox" data-f="allowLate"' + (s.allowLate ? ' checked' : '') + '> 마감 뒤에도 받기</label></div>' +
+        '</div></div>';
+    }).join('');
+    $('cfgStages').querySelectorAll('.stage-edit').forEach(function (box) {
+      var i = Number(box.dataset.i);
+      box.querySelectorAll('[data-f]').forEach(function (el) {
+        el.addEventListener('input', function () { readStage(box, i); });
+        el.addEventListener('change', function () { readStage(box, i); });
+      });
+      box.querySelectorAll('[data-act]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var a = b.dataset.act;
+          if (a === 'del') { if (!confirm('이 단계를 지울까요?')) return; CFG.stages.splice(i, 1); }
+          else { var j = a === 'up' ? i - 1 : i + 1; var t = CFG.stages[i]; CFG.stages[i] = CFG.stages[j]; CFG.stages[j] = t; }
+          renderStages();
+        });
+      });
+    });
+  }
+  function readStage(box, i) {
+    var s = CFG.stages[i];
+    box.querySelectorAll('[data-f]').forEach(function (el) {
+      s[el.dataset.f] = el.type === 'checkbox' ? el.checked : el.value;
+    });
+  }
+  $('btnAddStage').addEventListener('click', function () {
+    CFG.stages.push({ id: '', name: '새 단계', desc: '', focus: '', mode: '파일+글', deadline: '', open: false, allowLate: true, used: false });
+    renderStages();
+  });
+
+  function renderRubric() {
+    $('cfgRubric').innerHTML = CFG.rubric.map(function (r, i) {
+      return '<div class="rubric-edit" data-i="' + i + '">' +
+        '<div class="hd"><input class="item" data-f="item" value="' + esc(r.item) + '" placeholder="평가 항목">' +
+        '<input class="max" type="number" min="1" data-f="max" value="' + esc(r.max) + '" title="배점">' +
+        '<button type="button" class="icon-btn" data-act="up"' + (i === 0 ? ' disabled' : '') + '>↑</button>' +
+        '<button type="button" class="icon-btn" data-act="down"' + (i === CFG.rubric.length - 1 ? ' disabled' : '') + '>↓</button>' +
+        '<button type="button" class="icon-btn" data-act="del">✕</button></div>' +
+        '<div class="lv3">' +
+        '<label>상<textarea data-f="high" rows="2">' + esc(r.high) + '</textarea></label>' +
+        '<label>중<textarea data-f="mid" rows="2">' + esc(r.mid) + '</textarea></label>' +
+        '<label>하<textarea data-f="low" rows="2">' + esc(r.low) + '</textarea></label></div></div>';
+    }).join('');
+    $('cfgRubric').querySelectorAll('.rubric-edit').forEach(function (box) {
+      var i = Number(box.dataset.i);
+      box.querySelectorAll('[data-f]').forEach(function (el) {
+        el.addEventListener('input', function () {
+          CFG.rubric[i][el.dataset.f] = el.dataset.f === 'max' ? Number(el.value) : el.value;
+          rubricTotal();
+        });
+      });
+      box.querySelectorAll('[data-act]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var a = b.dataset.act;
+          if (a === 'del') { if (!confirm('이 평가 항목을 지울까요?')) return; CFG.rubric.splice(i, 1); }
+          else { var j = a === 'up' ? i - 1 : i + 1; var t = CFG.rubric[i]; CFG.rubric[i] = CFG.rubric[j]; CFG.rubric[j] = t; }
+          renderRubric();
+        });
+      });
+    });
+    rubricTotal();
+  }
+  function rubricTotal() {
+    var t = CFG.rubric.reduce(function (a, r) { return a + (Number(r.max) || 0); }, 0);
+    $('rubricTotal').textContent = t;
+    $('rubricWarn').textContent = t === 100 ? '' : '  (100점이 아니어도 저장할 수 있습니다)';
+  }
+  $('btnAddRubric').addEventListener('click', function () {
+    CFG.rubric.push({ item: '', max: 10, high: '', mid: '', low: '' });
+    renderRubric();
+  });
+
+  $('btnSaveConfig').addEventListener('click', function () {
+    var settings = {};
+    $('cfgSettings').querySelectorAll('[data-key]').forEach(function (el) { settings[el.dataset.key] = el.value; });
+    $('cfgErr').textContent = '';
+    loading(true, '설정을 저장하는 중…');
+    admin('adminSaveConfig', {
+      settings: settings,
+      stages: CFG.stages.map(function (s) {
+        return { id: s.id, name: s.name, desc: s.desc, focus: s.focus, mode: s.mode, deadline: s.deadline, open: !!s.open, allowLate: !!s.allowLate };
+      }),
+      rubric: CFG.rubric,
+    }).then(function (c) {
+      CFG = c; renderConfig(); loading(false); toast('설정을 저장했습니다. 학생 화면은 새로 고치면 바뀝니다.');
+      loadDashboard();
+    }).catch(function (e) { loading(false); $('cfgErr').textContent = e.message; });
+  });
+
+  // ───────── 명단·도구 ─────────
+  function renderTools() {
+    $('rosterText').value = CFG.roster.map(function (r) { return [r.id, r.name, r.email].filter(String).join(' '); }).join('\n');
+    $('rosterInfo').textContent = '지금 ' + CFG.roster.length + '명';
+    $('dailyToggle').checked = CFG.dailyTrigger;
+    $('apiInfo').textContent = CFG.hasApiKey
+      ? 'API 키가 저장되어 있습니다. 바꾸려면 새 키를 넣으세요.'
+      : 'API 키가 없습니다. console.anthropic.com에서 발급한 키를 넣으면 AI 초안을 쓸 수 있습니다.';
+    var url = CFG.webAppUrl || BASE;
+    $('urlStudent').textContent = url || '(배포 뒤에 보입니다)';
+    $('urlAdmin').textContent = url ? url + '?page=admin' : '';
+  }
+
+  $('btnSaveRoster').addEventListener('click', function () {
+    loading(true, '명단을 저장하는 중…');
+    admin('adminSaveRoster', $('rosterText').value).then(function (r) {
+      CFG.roster = r.roster; renderTools(); loading(false); toast('명단 ' + r.count + '명을 저장했습니다.'); loadDashboard();
+    }).catch(fail);
+  });
+  $('dailyToggle').addEventListener('change', function (e) {
+    admin('adminToggleDailyTrigger', e.target.checked).then(function (on) {
+      CFG.dailyTrigger = on; toast(on ? '매일 아침 도착 메일을 보냅니다.' : '자동 발송을 껐습니다.');
+    }).catch(function (err) { e.target.checked = !e.target.checked; fail(err); });
+  });
+  $('btnApiKey').addEventListener('click', function () {
+    var k = $('apiKey').value.trim();
+    if (!k) return;
+    admin('adminSetApiKey', k).then(function () {
+      $('apiKey').value = ''; CFG.hasApiKey = true; if (DASH) DASH.hasApiKey = true; renderTools(); toast('API 키를 저장했습니다.');
+      $('btnDraftPending').disabled = false;
+    }).catch(fail);
+  });
+  $('btnPw').addEventListener('click', function () {
+    admin('adminChangePassword', $('pwOld').value, $('pwNew').value).then(function () {
+      $('pwOld').value = ''; $('pwNew').value = ''; toast('비밀번호를 바꿨습니다.');
+    }).catch(fail);
+  });
+})();
+</script>

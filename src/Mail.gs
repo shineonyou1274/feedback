@@ -91,6 +91,7 @@ function sendArrivalMails_() {
 }
 
 function menuSendArrivalMails() {
+  uiOnly_();
   const r = sendArrivalMails_();
   SpreadsheetApp.getUi().alert(r.reason ? `보내지 않았습니다: ${r.reason}` : `도착 메일 ${r.sent}통을 보냈습니다.${r.skipped ? ` (이메일이 없거나 실패: ${r.skipped}명)` : ''}`);
 }

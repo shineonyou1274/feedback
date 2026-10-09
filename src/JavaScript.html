@@ -5,7 +5,6 @@
   var CFG = null;
   var state = { stageId: '', file: null };
   var DRAFT_KEY = 'fb-draft-v1';
-  var PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
   var $ = function (id) { return document.getElementById(id); };
 
   function esc(s) {
@@ -345,63 +344,14 @@
     if (r.items.some(function (i) { return i.status === 'arrived'; })) $('mascot').classList.add('happy');
   }
 
-  // ───────── PDF 보기 (pdf.js) ─────────
-  var pdfjsReady = null;
-  function loadPdfJs() {
-    if (pdfjsReady) return pdfjsReady;
-    pdfjsReady = new Promise(function (resolve, reject) {
-      var s = document.createElement('script');
-      s.src = PDFJS + 'pdf.min.js';
-      s.onload = function () {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js';
-        resolve(window.pdfjsLib);
-      };
-      s.onerror = function () { pdfjsReady = null; reject(new Error('문서 보기 도구를 불러오지 못했습니다.')); };
-      document.head.appendChild(s);
-    });
-    return pdfjsReady;
-  }
-
+  // ───────── PDF 보기 ─────────
   function openPdf(receipt, title) {
     loading(true, '피드백 문서를 여는 중…');
-    Promise.all([call('getFeedbackPdf', who.id, who.name, receipt), loadPdfJs()])
-      .then(function (res) {
-        var file = res[0], lib = res[1];
-        $('pdfTitle').textContent = (title || '') + ' 피드백';
-        $('pdfDownload').href = 'data:application/pdf;base64,' + file.data;
-        $('pdfDownload').setAttribute('download', file.fileName);
-        var bin = atob(file.data), bytes = new Uint8Array(bin.length);
-        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        return lib.getDocument({ data: bytes, cMapUrl: PDFJS + 'cmaps/', cMapPacked: true }).promise;
-      })
-      .then(function (pdf) {
-        var box = $('pdfPages');
-        box.innerHTML = '';
-        $('pdfModal').hidden = false;
-        loading(false);
-        var chain = Promise.resolve();
-        for (var n = 1; n <= pdf.numPages; n++) {
-          (function (n) {
-            chain = chain.then(function () { return pdf.getPage(n); }).then(function (page) {
-              var ratio = Math.min(window.devicePixelRatio || 1, 2);
-              var width = Math.min(box.clientWidth || 800, 860);
-              var vp0 = page.getViewport({ scale: 1 });
-              var vp = page.getViewport({ scale: width / vp0.width * ratio });
-              var c = document.createElement('canvas');
-              c.width = vp.width; c.height = vp.height;
-              box.appendChild(c);
-              return page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
-            });
-          })(n);
-        }
-        return chain;
-      })
-      .catch(function (e) {
-        loading(false);
-        alert(e.message);
-      });
+    call('getFeedbackPdf', who.id, who.name, receipt)
+      .then(function (file) { return PdfView.open(file, (title || '') + ' 피드백'); })
+      .then(function () { loading(false); })
+      .catch(function (e) { loading(false); alert(e.message); });
   }
-  $('pdfClose').addEventListener('click', function () { $('pdfModal').hidden = true; $('pdfPages').innerHTML = ''; });
 
   // ───────── 색종이 ─────────
   function confetti() {

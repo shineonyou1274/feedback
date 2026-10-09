@@ -232,39 +232,47 @@ function selectedFeedbackRows_() {
 }
 
 function menuDraftSelected() {
+  uiOnly_();
   const ui = SpreadsheetApp.getUi();
-  const sh = sheet_(SHEET.FEEDBACK);
-  const map = headerMap_(sh);
   const ctx = aiContext_();
-  const targets = selectedFeedbackRows_();
+  let targets = selectedFeedbackRows_();
   const locked = targets.filter(r => {
     const st = ctx.fbRows.find(x => x._row === r);
     return st && (st['상태'] === STATUS.DONE || st['상태'] === STATUS.PDF);
   });
   if (locked.length && ui.alert(`확정했거나 PDF를 만든 행이 ${locked.length}개 있습니다. 그 행도 AI 초안으로 덮어쓸까요?`, ui.ButtonSet.YES_NO) !== ui.Button.YES) {
-    targets.splice(0, targets.length, ...targets.filter(r => locked.indexOf(r) < 0));
+    targets = targets.filter(r => locked.indexOf(r) < 0);
   }
-  runDrafts_(sh, map, ctx, targets);
+  alertDraftResult_(makeDrafts_(targets, ctx, true));
 }
 
 function menuDraftAll() {
-  const sh = sheet_(SHEET.FEEDBACK);
-  const map = headerMap_(sh);
-  const ctx = aiContext_();
-  const targets = ctx.fbRows.filter(r => r['접수번호'] && (r['상태'] === STATUS.NEW || r['상태'] === '')).map(r => r._row);
-  runDrafts_(sh, map, ctx, targets);
+  uiOnly_();
+  alertDraftResult_(makeDrafts_(pendingDraftRows_(), null, true));
 }
 
-function runDrafts_(sh, map, ctx, targets) {
+function pendingDraftRows_() {
+  return readRows_(sheet_(SHEET.FEEDBACK))
+    .filter(r => r['접수번호'] && (r['상태'] === STATUS.NEW || r['상태'] === ''))
+    .map(r => r._row);
+}
+
+/** 결과: {done, left, errors[]} */
+function makeDrafts_(targets, ctx, toast) {
+  const sh = sheet_(SHEET.FEEDBACK);
+  const map = headerMap_(sh);
+  ctx = ctx || aiContext_();
   const start = Date.now();
-  let done = 0;
+  let done = 0, processed = 0;
   const errors = [];
   for (const r of targets) {
-    if (Date.now() - start > TIME_BUDGET_MS) break;
+    // AI 한 번에 1분 안팎이 걸리므로 여유를 둔다.
+    if (Date.now() - start > TIME_BUDGET_MS - 60 * 1000) break;
+    processed++;
     const row = ctx.fbRows.find(x => x._row === r);
     if (!row || !row['접수번호']) continue;
     try {
-      SpreadsheetApp.getActive().toast(`${row['이름']} (${row['단계명']}) 초안 만드는 중…`, 'AI 초안', 30);
+      if (toast) SpreadsheetApp.getActive().toast(`${row['이름']} (${row['단계명']}) 초안 만드는 중…`, 'AI 초안', 30);
       draftRow_(sh, map, row, ctx);
       done++;
       SpreadsheetApp.flush();
@@ -272,10 +280,13 @@ function runDrafts_(sh, map, ctx, targets) {
       errors.push(`${row['학번']} ${row['이름']}: ${err.message}`);
     }
   }
-  const left = targets.length - done - errors.length;
+  return { done, left: targets.length - processed, errors };
+}
+
+function alertDraftResult_(r) {
   SpreadsheetApp.getUi().alert(
-    `AI 초안 ${done}건을 만들었습니다.` +
-    (left > 0 ? `\n실행 시간 제한 때문에 ${left}건이 남았습니다. 같은 메뉴를 한 번 더 실행하세요.` : '') +
-    (errors.length ? `\n\n실패:\n${errors.join('\n')}` : '') +
+    `AI 초안 ${r.done}건을 만들었습니다.` +
+    (r.left > 0 ? `\n실행 시간 제한 때문에 ${r.left}건이 남았습니다. 같은 메뉴를 한 번 더 실행하세요.` : '') +
+    (r.errors.length ? `\n\n실패:\n${r.errors.join('\n')}` : '') +
     '\n\n초안을 읽고 고친 뒤 "확정 표시"를 하세요. 점수 근거는 "예상 합계" 칸의 메모에 있습니다.');
 }

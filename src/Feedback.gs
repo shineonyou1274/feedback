@@ -5,6 +5,7 @@
 const C = { yellow: '#FFD93B', denim: '#2F5DA8', ink: '#222222', soft: '#FFF6CC' };
 
 function menuConfirmSelected() {
+  uiOnly_();
   const sh = sheet_(SHEET.FEEDBACK);
   const map = headerMap_(sh);
   const rows = selectedFeedbackRows_();
@@ -13,35 +14,53 @@ function menuConfirmSelected() {
 }
 
 function menuPdfSelected() {
-  runPdfs_(selectedFeedbackRows_(), true);
+  uiOnly_();
+  alertPdfResult_(makePdfs_(selectedFeedbackRows_(), true));
 }
 
 function menuPdfAll() {
+  uiOnly_();
   const rows = readRows_(sheet_(SHEET.FEEDBACK)).filter(r => r['상태'] === STATUS.DONE).map(r => r._row);
-  runPdfs_(rows, false);
+  alertPdfResult_(makePdfs_(rows, false));
 }
 
-function runPdfs_(targetRows, allowAnyStatus) {
-  const sh = sheet_(SHEET.FEEDBACK);
-  const map = headerMap_(sh);
-  const all = readRows_(sh);
+function alertPdfResult_(r) {
+  SpreadsheetApp.getUi().alert(
+    `PDF ${r.done}건을 만들었습니다.` +
+    (r.left ? `\n실행 시간 제한 때문에 ${r.left}건이 남았습니다. 같은 메뉴를 한 번 더 실행하세요.` : '') +
+    (r.skipped.length ? `\n건너뜀: ${r.skipped.join(', ')}` : '') +
+    (r.errors.length ? `\n\n실패:\n${r.errors.join('\n')}` : '') +
+    '\n\n학생에게 보이게 하려면 "공개" 칸을 체크하고 공개일을 정하세요. (공개일이 비어 있으면 바로 보입니다.)');
+}
+
+function pdfContext_() {
   const ctx = {
     settings: getSettings_(),
     rubric: getRubric_(),
     stages: getStages_(),
     subByReceipt: {},
-    fbRows: all,
+    fbRows: readRows_(sheet_(SHEET.FEEDBACK)),
   };
   readRows_(sheet_(SHEET.SUBMIT)).forEach(r => { ctx.subByReceipt[r['접수번호']] = r; });
+  return ctx;
+}
+
+/** 피드백 시트의 행 번호 목록으로 PDF를 만든다. 결과: {done, left, skipped[], errors[]} */
+function makePdfs_(targetRows, allowAnyStatus) {
+  const sh = sheet_(SHEET.FEEDBACK);
+  const map = headerMap_(sh);
+  const ctx = pdfContext_();
+  const all = ctx.fbRows;
   const start = Date.now();
-  let done = 0;
+  let done = 0, processed = 0;
   const errors = [], skipped = [];
   for (const r of targetRows) {
     if (Date.now() - start > TIME_BUDGET_MS) break;
+    processed++;
     const row = all.find(x => x._row === r);
     if (!row || !row['접수번호']) continue;
     if (!allowAnyStatus && row['상태'] !== STATUS.DONE) continue;
-    if (row['상태'] === STATUS.NEW) { skipped.push(`${row['이름']}(미작성)`); continue; }
+    if (row['상태'] === STATUS.NEW || row['상태'] === '') { skipped.push(`${row['이름']}(미작성)`); continue; }
     try {
       const pdf = buildPdf_(row, ctx);
       writeCells_(sh, r, map, { 'PDF ID': pdf.getId(), 'PDF 생성시각': new Date(), '상태': STATUS.PDF });
@@ -52,12 +71,7 @@ function runPdfs_(targetRows, allowAnyStatus) {
       errors.push(`${row['학번']} ${row['이름']}: ${err.message}`);
     }
   }
-  SpreadsheetApp.getUi().alert(
-    `PDF ${done}건을 만들었습니다.` +
-    (done < targetRows.length - errors.length - skipped.length ? '\n남은 행이 있으면 같은 메뉴를 한 번 더 실행하세요.' : '') +
-    (skipped.length ? `\n건너뜀: ${skipped.join(', ')}` : '') +
-    (errors.length ? `\n\n실패:\n${errors.join('\n')}` : '') +
-    '\n\n학생에게 보이게 하려면 "공개" 칸을 체크하고 공개일을 정하세요. (공개일이 비어 있으면 바로 보입니다.)');
+  return { done, left: targetRows.length - processed, leftRows: targetRows.slice(processed), skipped, errors };
 }
 
 /** 피드백 문서를 구글 문서로 만들어 PDF로 저장하고, 문서는 지운다. */
@@ -221,24 +235,30 @@ function growth_(row, ctx) {
 
 // ───────────────────────── 공개 ─────────────────────────
 
-function menuPublishSelected() { setPublish_(selectedFeedbackRows_(), true); }
-function menuUnpublishSelected() { setPublish_(selectedFeedbackRows_(), false); }
+function menuPublishSelected() { uiOnly_(); alertPublish_(setPublish_(selectedFeedbackRows_(), true), true); }
+function menuUnpublishSelected() { uiOnly_(); alertPublish_(setPublish_(selectedFeedbackRows_(), false), false); }
 
-function setPublish_(rows, on) {
+/** 결과: {count, noPdf[]} — releaseDate(Date|''|undefined)를 주면 공개일도 함께 바꾼다. */
+function setPublish_(rows, on, releaseDate) {
   const sh = sheet_(SHEET.FEEDBACK);
   const map = headerMap_(sh);
   const all = readRows_(sh);
-  let n = 0;
+  let count = 0;
   const noPdf = [];
   rows.forEach(r => {
     const row = all.find(x => x._row === r);
     if (!row) return;
     if (on && !row['PDF ID']) { noPdf.push(row['이름']); return; }
     sh.getRange(r, map['공개']).setValue(on);
-    n++;
+    if (on && releaseDate !== undefined) sh.getRange(r, map['공개일']).setValue(releaseDate);
+    count++;
   });
+  return { count, noPdf };
+}
+
+function alertPublish_(r, on) {
   SpreadsheetApp.getUi().alert(
-    `${n}행을 ${on ? '공개' : '공개 취소'}했습니다.` +
+    `${r.count}행을 ${on ? '공개' : '공개 취소'}했습니다.` +
     (on ? '\n공개일이 정해져 있으면 그날부터, 비어 있으면 지금부터 학생 화면에 보입니다.' : '') +
-    (noPdf.length ? `\n\nPDF가 없어 건너뜀: ${noPdf.join(', ')}` : ''));
+    (r.noPdf.length ? `\n\nPDF가 없어 건너뜀: ${r.noPdf.join(', ')}` : ''));
 }
