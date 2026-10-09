@@ -350,23 +350,28 @@ function adminFeedbackPdf(token, receipt) {
 
 // ───────────────────────── 과제 설정 ─────────────────────────
 
-/** 관리 화면에서 고칠 수 있는 설정 키 */
-const EDITABLE_KEYS = [
-  KEY.COURSE, KEY.TITLE, KEY.STANDARD, KEY.GUIDE, KEY.TEACHER, KEY.WEBAPP_URL,
-  KEY.ROSTER_ONLY, KEY.MAX_MB, KEY.EXTS,
-  KEY.SUBMIT_MAIL, KEY.SUBMIT_MAIL_SUBJECT, KEY.ARRIVE_MAIL, KEY.ARRIVE_MAIL_SUBJECT,
-  KEY.AI_MODEL, KEY.AI_EFFORT,
-];
+/**
+ * 관리 화면에서 고칠 수 있는 설정 키.
+ * 파일이 읽히는 순서와 상관없이 쓰도록 함수로 둔다 (Config.gs의 KEY를 맨 위에서 바로 쓰지 않는다).
+ */
+function editableKeys_() {
+  return [
+    KEY.COURSE, KEY.TITLE, KEY.STANDARD, KEY.GUIDE, KEY.TEACHER, KEY.WEBAPP_URL,
+    KEY.ROSTER_ONLY, KEY.MAX_MB, KEY.EXTS,
+    KEY.SUBMIT_MAIL, KEY.SUBMIT_MAIL_SUBJECT, KEY.ARRIVE_MAIL, KEY.ARRIVE_MAIL_SUBJECT,
+    KEY.AI_MODEL, KEY.AI_EFFORT,
+  ];
+}
 
 function adminGetConfig(token) {
   requireAdmin_(token);
   const s = getSettings_();
   const settings = {};
-  EDITABLE_KEYS.forEach(k => { settings[k] = s[k] === undefined ? '' : s[k]; });
+  editableKeys_().forEach(k => { settings[k] = s[k] === undefined ? '' : s[k]; });
   const usedStages = new Set(readRows_(sheet_(SHEET.SUBMIT)).map(r => String(r['단계ID'])));
   return {
     settings,
-    keys: EDITABLE_KEYS,
+    keys: editableKeys_(),
     stages: getStages_().map(st => ({
       id: st.id, name: st.name, desc: st.desc, focus: st.focus, mode: st.mode,
       deadline: st.deadline ? Utilities.formatDate(st.deadline, 'Asia/Seoul', "yyyy-MM-dd'T'HH:mm") : '',
@@ -388,7 +393,7 @@ function adminSaveConfig(token, cfg) {
   lock.waitLock(30000);
   try {
     if (c.settings) {
-      EDITABLE_KEYS.forEach(k => {
+      editableKeys_().forEach(k => {
         if (c.settings[k] === undefined) return;
         let v = c.settings[k];
         if (k === KEY.MAX_MB) {

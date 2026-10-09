@@ -39,7 +39,7 @@ src/
   Mail.gs           제출 완료 메일, 피드백 도착 메일
   Ai.gs             Claude API로 예상 점수·피드백 초안 만들기
   Feedback.gs       확정, PDF 만들기, 공개
-  Admin.gs          관리 화면 서버 함수 (로그인, 현황, 피드백 저장, 설정, 명단)
+  AdminApi.gs       관리 화면 서버 함수 (로그인, 현황, 피드백 저장, 설정, 명단)
   Index.html        학생 화면
   Admin.html        관리 화면
   Stylesheet.html   노랑·데님 테마 (공통)
@@ -54,19 +54,30 @@ scripts/deploy-gws.sh   gws CLI로 시트·스크립트 만들고 배포
 
 ### 방법 1. gws CLI로 한 번에
 
-1. [Apps Script 설정](https://script.google.com/home/usersettings)에서 **Google Apps Script API**를 켭니다.
-2. `gws auth login`으로 로그인합니다.
-3. 아래를 실행합니다.
+처음 한 번만 준비합니다.
 
 ```bash
-./scripts/deploy-gws.sh init "인간과 심리 1차 과제"   # 시트 + 스크립트 + 첫 배포
-./scripts/deploy-gws.sh push                         # 코드만 올리기
-./scripts/deploy-gws.sh deploy "피드백 화면 수정"      # 코드 올리고 같은 주소로 새 버전 배포
+npm install -g @googleworkspace/cli        # gws 0.22 이상
+gws auth setup --login                     # gcloud가 있을 때. 없으면 아래 '수동 OAuth 설정' 링크 참고
+gws auth login -s script,sheets,drive      # Apps Script 권한을 꼭 함께 받습니다
 ```
 
-`init`은 만든 시트·스크립트·배포 ID를 `.gws-deploy.json`에 적어 둡니다. `deploy`는 같은 배포를 새 버전으로 바꾸므로 **학생에게 준 주소가 바뀌지 않습니다.**
+- [Apps Script 설정](https://script.google.com/home/usersettings)에서 **Google Apps Script API**를 켭니다.
+- gcloud 없이 준비하려면 [gws 수동 OAuth 설정](https://github.com/googleworkspace/cli#manual-oauth-setup-google-cloud-console)을 따릅니다. 이때 Cloud 프로젝트에서 Apps Script API, Sheets API, Drive API를 사용으로 바꿉니다.
 
-> gws 버전에 따라 하위 명령 이름이 다를 수 있습니다. 오류가 나면 `gws script --help`로 이름을 확인해 스크립트를 고치세요.
+그다음 실행합니다.
+
+```bash
+./scripts/deploy-gws.sh check                      # 로그인·권한·API가 준비됐는지 점검
+./scripts/deploy-gws.sh init "인간과 심리 1차 과제"   # 시트 + 스크립트 + 코드 + 첫 배포
+./scripts/deploy-gws.sh deploy "피드백 화면 수정"      # 코드를 고친 뒤: 같은 주소로 새 버전 배포
+./scripts/deploy-gws.sh status                     # 저장된 ID와 주소 보기
+```
+
+- `init`이 중간에 실패하면 안내대로 고친 뒤 같은 명령을 다시 실행하세요. 이미 만든 시트와 스크립트는 다시 만들지 않고 이어서 합니다.
+- 이미 만든 시트에 붙이려면 `init --sheet 시트ID`를 씁니다.
+- 실패하면 원인(로그인, 권한, API 꺼짐, 학교 관리자 차단)을 한국어로 알려 줍니다.
+- `init`이 끝나면 **시트를 열어 `📮 과제 피드백 > ① 처음 설정`을 꼭 한 번 실행**하세요. 그 전에는 웹앱 주소를 열면 권한 오류가 납니다.
 
 ### 방법 2. 직접 붙여 넣기
 
