@@ -1,0 +1,429 @@
+<script>
+(function () {
+  'use strict';
+
+  var CFG = null;
+  var state = { stageId: '', file: null };
+  var DRAFT_KEY = 'fb-draft-v1';
+  var PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+  var $ = function (id) { return document.getElementById(id); };
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function call(fn) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function (resolve, reject) {
+      var r = google.script.run.withSuccessHandler(resolve).withFailureHandler(function (e) {
+        reject(new Error((e && e.message ? e.message : String(e)).replace(/^Exception:\s*/, '').replace(/^Error:\s*/, '')));
+      });
+      r[fn].apply(r, args);
+    });
+  }
+  function loading(on, text) {
+    $('loading').hidden = !on;
+    $('loadingText').textContent = text || '잠시만요…';
+  }
+  function store(fn) { try { return fn(); } catch (e) { return null; } }
+
+  // ───────── 탭 ─────────
+  document.querySelectorAll('.tab').forEach(function (b) {
+    b.addEventListener('click', function () { showTab(b.dataset.tab); });
+  });
+  function showTab(name) {
+    document.querySelectorAll('.tab').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === name); });
+    $('tab-submit').hidden = name !== 'submit';
+    $('tab-check').hidden = name !== 'check';
+  }
+
+  // ───────── 처음 불러오기 ─────────
+  loading(true, '과제를 불러오는 중…');
+  call('getPublicConfig').then(function (cfg) {
+    CFG = cfg;
+    $('course').textContent = cfg.course;
+    $('title').textContent = cfg.title;
+    $('guide').textContent = cfg.guide;
+    $('guide').hidden = !cfg.guide;
+    $('fileHint').textContent = '올릴 수 있는 형식: ' + (cfg.exts.join(', ') || '모두') + ' · 최대 ' + cfg.maxMB + 'MB';
+    renderStages();
+    renderRubric();
+    restoreDraft();
+    loading(false);
+  }).catch(function (e) {
+    loading(false);
+    $('guide').textContent = '과제 정보를 불러오지 못했습니다. 선생님께 알려 주세요.\n(' + e.message + ')';
+  });
+
+  function renderStages() {
+    var box = $('stageList');
+    var firstOpen = '';
+    box.innerHTML = CFG.stages.map(function (st, i) {
+      var badge, late = st.deadline && Date.now() > st.deadline;
+      if (!st.open) badge = '아직 안 열림';
+      else if (!st.canSubmit) badge = '마감';
+      else if (late) badge = '늦은 제출';
+      else badge = remain(st.deadline);
+      if (st.canSubmit && !firstOpen) firstOpen = st.id;
+      return '<button type="button" class="stage" data-id="' + esc(st.id) + '"' + (st.canSubmit ? '' : ' disabled') + '>' +
+        '<span class="num">' + (i + 1) + '</span>' +
+        '<span><span class="nm">' + esc(st.name) + '</span><br><span class="dl">' +
+        (st.deadlineText ? '마감 ' + esc(st.deadlineText) : '마감 없음') + '</span></span>' +
+        '<span class="badge">' + esc(badge) + '</span></button>';
+    }).join('');
+    box.querySelectorAll('.stage').forEach(function (b) {
+      b.addEventListener('click', function () { pickStage(b.dataset.id); });
+    });
+    if (firstOpen) pickStage(firstOpen);
+    else $('stageDesc').textContent = '지금 제출할 수 있는 단계가 없습니다.';
+  }
+
+  function remain(deadline) {
+    if (!deadline) return '제출 가능';
+    var ms = deadline - Date.now();
+    var d = Math.floor(ms / 86400000), h = Math.floor(ms % 86400000 / 3600000);
+    return d > 0 ? d + '일 ' + h + '시간 남음' : h > 0 ? h + '시간 남음' : '곧 마감';
+  }
+
+  function pickStage(id) {
+    state.stageId = id;
+    var st = stage();
+    document.querySelectorAll('.stage').forEach(function (b) { b.classList.toggle('sel', b.dataset.id === id); });
+    $('stageDesc').textContent = st ? st.desc : '';
+    var mode = st ? st.mode : '파일+글';
+    $('fileWrap').hidden = mode === '글';
+    $('bodyLabel').hidden = mode === '파일';
+    $('bodyOpt').textContent = mode === '글' ? '(필수)' : '(파일 대신 바로 적어도 돼요)';
+    saveDraft();
+  }
+  function stage() { return CFG && CFG.stages.find(function (s) { return s.id === state.stageId; }); }
+
+  function renderRubric() {
+    if (!CFG.rubric.length) { $('rubricPeek').hidden = true; return; }
+    var total = CFG.rubric.reduce(function (a, r) { return a + r.max; }, 0);
+    $('rubricBody').innerHTML = '<table class="t"><tr><th>평가 항목</th><th>배점</th><th>이렇게 하면 "상"</th></tr>' +
+      CFG.rubric.map(function (r) {
+        return '<tr><td>' + esc(r.item) + '</td><td>' + esc(r.max) + '</td><td>' + esc(r.high) + '</td></tr>';
+      }).join('') + '<tr><th>합계</th><th>' + total + '</th><th></th></tr></table>' +
+      '<p class="tiny" style="text-align:left">단계마다 "지금 상태로 최종 제출하면 몇 점일지" 예상 점수를 알려 줍니다.</p>';
+  }
+
+  // ───────── 글자 수 · 임시 저장 ─────────
+  ['did', 'question', 'body'].forEach(function (id) {
+    $(id).addEventListener('input', function () { counter(id); saveDraft(); });
+  });
+  ['sid', 'sname', 'semail'].forEach(function (id) { $(id).addEventListener('input', saveDraft); });
+  function counter(id) {
+    var el = document.querySelector('.count[data-for="' + id + '"]');
+    if (el) el.textContent = $(id).value.length.toLocaleString() + ' / ' + Number($(id).maxLength).toLocaleString() + '자';
+  }
+  function saveDraft() {
+    store(function () {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        sid: $('sid').value, sname: $('sname').value, semail: $('semail').value,
+        did: $('did').value, question: $('question').value, body: $('body').value, stageId: state.stageId,
+      }));
+    });
+  }
+  function restoreDraft() {
+    var d = store(function () { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); });
+    if (d) {
+      ['sid', 'sname', 'semail', 'did', 'question', 'body'].forEach(function (k) { if (d[k]) $(k).value = d[k]; });
+      var st = CFG.stages.find(function (s) { return s.id === d.stageId && s.canSubmit; });
+      if (st) pickStage(st.id);
+      if (d.sid) $('lid').value = d.sid;
+      if (d.sname) $('lname').value = d.sname;
+    }
+    ['did', 'question', 'body'].forEach(counter);
+  }
+  function clearDraftAfterSubmit() {
+    store(function () {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ sid: $('sid').value, sname: $('sname').value, semail: $('semail').value }));
+    });
+    ['did', 'question', 'body'].forEach(function (k) { $(k).value = ''; counter(k); });
+    setFile(null);
+  }
+
+  // ───────── 파일 ─────────
+  var drop = $('drop'), input = $('file');
+  drop.addEventListener('click', function () { input.click(); });
+  drop.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
+  input.addEventListener('change', function () { if (input.files[0]) setFile(input.files[0]); });
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); });
+  });
+  drop.addEventListener('drop', function (e) {
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+  });
+
+  function setFile(f) {
+    $('formErr').textContent = '';
+    if (f) {
+      var ext = (f.name.split('.').pop() || '').toLowerCase();
+      if (CFG.exts.length && CFG.exts.indexOf(ext) < 0) {
+        $('formErr').textContent = '올릴 수 없는 형식입니다. (' + CFG.exts.join(', ') + ')';
+        f = null;
+      } else if (f.size > CFG.maxMB * 1024 * 1024) {
+        $('formErr').textContent = '파일이 너무 큽니다. ' + CFG.maxMB + 'MB 이하로 줄여 주세요.';
+        f = null;
+      }
+    }
+    state.file = f;
+    input.value = '';
+    var p = $('picked');
+    if (!f) { p.hidden = true; p.innerHTML = ''; drop.hidden = false; return; }
+    p.hidden = false;
+    drop.hidden = true;
+    p.innerHTML = '📄 <span>' + esc(f.name) + ' <small>(' + (f.size / 1048576).toFixed(1) + 'MB)</small></span>' +
+      '<button type="button" class="btn small" id="btnUnpick">빼기</button>';
+    $('btnUnpick').addEventListener('click', function () { setFile(null); });
+  }
+
+  function readBase64(f) {
+    return new Promise(function (resolve, reject) {
+      var r = new FileReader();
+      r.onload = function () { resolve(String(r.result).split(',')[1] || ''); };
+      r.onerror = function () { reject(new Error('파일을 읽지 못했습니다.')); };
+      r.readAsDataURL(f);
+    });
+  }
+
+  // ───────── 제출 ─────────
+  function collect() {
+    return {
+      studentId: $('sid').value.trim(),
+      name: $('sname').value.trim(),
+      email: $('semail').value.trim(),
+      stageId: state.stageId,
+      did: $('did').value.trim(),
+      question: $('question').value.trim(),
+      body: $('bodyLabel').hidden ? '' : $('body').value.trim(),
+    };
+  }
+
+  function validate(p) {
+    var st = stage();
+    if (!st) return '제출할 단계를 고르세요.';
+    if (!/^\d{4,6}$/.test(p.studentId.replace(/\D/g, ''))) return '학번을 숫자로 입력하세요.';
+    if (!p.name) return '이름을 입력하세요.';
+    if (p.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.email)) return '이메일 주소를 다시 확인하세요.';
+    if (!p.did) return '"이번 단계에서 한 일"을 적어 주세요.';
+    if (st.mode === '파일' && !state.file) return '파일을 올려 주세요.';
+    if (st.mode === '글' && !p.body) return '본문을 적어 주세요.';
+    if (st.mode === '파일+글' && !state.file && !p.body) return '파일을 올리거나 본문을 적어 주세요.';
+    return '';
+  }
+
+  $('form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var p = collect();
+    var msg = validate(p);
+    $('formErr').textContent = msg;
+    if (msg) return;
+    var st = stage();
+    var rows = [
+      ['단계', st.name], ['학번', p.studentId], ['이름', p.name], ['이메일', p.email || '(없음)'],
+      ['이번 단계에서 한 일', p.did], ['어려웠던 점·질문', p.question || '(없음)'],
+    ];
+    if (p.body) rows.push(['본문', p.body.length > 300 ? p.body.slice(0, 300) + '…' : p.body]);
+    rows.push(['파일', state.file ? state.file.name : '(없음)']);
+    $('confirmBody').innerHTML = '<table class="t">' + rows.map(function (r) {
+      return '<tr><th>' + esc(r[0]) + '</th><td style="white-space:pre-wrap">' + esc(r[1]) + '</td></tr>';
+    }).join('') + '</table>';
+    $('confirmModal').hidden = false;
+  });
+  $('btnBack').addEventListener('click', function () { $('confirmModal').hidden = true; });
+
+  $('btnSend').addEventListener('click', function () {
+    var p = collect();
+    $('confirmModal').hidden = true;
+    loading(true, state.file ? '파일을 올리는 중…' : '제출하는 중…');
+    $('mascot').classList.add('bounce');
+    var ready = state.file
+      ? readBase64(state.file).then(function (b64) {
+          p.file = { name: state.file.name, mimeType: state.file.type || 'application/octet-stream', data: b64 };
+          return p;
+        })
+      : Promise.resolve(p);
+    ready.then(function (payload) { return call('submitAssignment', payload); })
+      .then(function (r) {
+        loading(false);
+        $('mascot').classList.remove('bounce');
+        $('doneBody').innerHTML = '<table class="t">' +
+          '<tr><th>접수 번호</th><td>' + esc(r.receipt) + '</td></tr>' +
+          '<tr><th>제출 시각</th><td>' + esc(r.time) + (r.late ? ' (마감 뒤 제출)' : '') + '</td></tr>' +
+          '<tr><th>단계</th><td>' + esc(r.stageName) + (r.attempt > 1 ? ' · ' + r.attempt + '번째 제출' : '') + '</td></tr>' +
+          (r.fileName ? '<tr><th>파일</th><td>' + esc(r.fileName) + '</td></tr>' : '') +
+          '</table>' + (r.mailed ? '<p>📧 확인 메일을 보냈습니다.</p>' : '');
+        $('doneModal').hidden = false;
+        confetti();
+        clearDraftAfterSubmit();
+      })
+      .catch(function (e) {
+        loading(false);
+        $('mascot').classList.remove('bounce');
+        $('formErr').textContent = e.message;
+      });
+  });
+  $('btnDone').addEventListener('click', function () { $('doneModal').hidden = true; });
+
+  // ───────── 확인·피드백 ─────────
+  var who = { id: '', name: '' };
+  $('lookupForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var id = $('lid').value.trim(), name = $('lname').value.trim();
+    $('lookupErr').textContent = '';
+    if (!id || !name) { $('lookupErr').textContent = '학번과 이름을 입력하세요.'; return; }
+    loading(true, '기록을 찾는 중…');
+    call('lookup', id, name).then(function (r) {
+      loading(false);
+      if (!r.found) {
+        $('lookupResult').innerHTML = '';
+        $('lookupErr').textContent = '제출 기록이 없습니다. 학번과 이름을 다시 확인하세요.';
+        return;
+      }
+      who = { id: id, name: name };
+      renderLookup(r);
+    }).catch(function (e) {
+      loading(false);
+      $('lookupErr').textContent = e.message;
+    });
+  });
+
+  var STATE_TEXT = { reading: '선생님이 읽는 중', writing: '피드백 준비 중', arrived: '피드백 도착' };
+
+  function renderLookup(r) {
+    var tl = '<div class="card"><h2>' + esc(r.name) + ' 학생의 진행 상황</h2><div class="timeline">' +
+      r.progress.map(function (p, i) {
+        var cls = p.feedback ? 'tl fb' : p.submitted ? 'tl sub' : 'tl';
+        var icon = p.feedback ? '✓' : p.submitted ? '…' : (i + 1);
+        return '<div class="' + cls + '"><div class="dot">' + icon + '</div><div class="lb">' + esc(p.name) + '</div>' +
+          (p.total !== null && p.total !== '' ? '<div class="sc">' + esc(p.total) + '점</div>' : '') + '</div>';
+      }).join('') + '</div>';
+
+    var scored = r.progress.filter(function (p) { return p.total !== null && p.total !== ''; });
+    if (scored.length) {
+      tl += '<div class="growth"><b>📈 예상 점수 변화</b>' + scored.map(function (p) {
+        var pct = p.maxTotal ? Math.max(0, Math.min(100, Number(p.total) / p.maxTotal * 100)) : 0;
+        return '<div class="bar-row"><span class="lb">' + esc(p.name) + '</span><span class="bar"><i style="width:' + pct.toFixed(0) + '%"></i></span>' +
+          '<span class="v">' + esc(p.total) + ' / ' + esc(p.maxTotal) + '</span></div>';
+      }).join('') + '</div>';
+    }
+    tl += '</div>';
+
+    var cards = r.items.map(function (it) {
+      var html = '<div class="card sub-card"><div class="head"><b>' + esc(it.stageName) + '</b>' +
+        (it.attempt > 1 ? '<span class="when">' + esc(it.attempt) + '번째 제출</span>' : '') +
+        '<span class="when">' + esc(it.time) + '</span>' +
+        '<span class="state ' + it.status + '">' + STATE_TEXT[it.status] + '</span></div>' +
+        '<dl class="kv"><dt>이번 단계에서 한 일</dt><dd>' + esc(it.did) + '</dd>' +
+        (it.question ? '<dt>어려웠던 점·질문</dt><dd>' + esc(it.question) + '</dd>' : '') +
+        '<dt>제출물</dt><dd>' + (it.fileName ? '📄 ' + esc(it.fileName) : '') + (it.hasBody ? (it.fileName ? ' + ' : '') + '본문' : '') + '</dd>' +
+        '<dt>접수 번호</dt><dd>' + esc(it.receipt) + '</dd></dl>';
+      if (it.status === 'arrived') {
+        html += '<div class="fb-box">' +
+          (it.total !== '' && it.total != null ? '<div>예상 점수 <span class="total">' + esc(it.total) + '</span> / ' + esc(it.maxTotal) + '</div>' : '') +
+          (it.scores && it.scores.length ? '<table class="t">' + it.scores.map(function (s) {
+            return '<tr><td>' + esc(s.item) + '</td><td style="width:90px;text-align:center">' + esc(s.score === '' ? '-' : s.score) + ' / ' + esc(s.max) + '</td></tr>';
+          }).join('') + '</table>' : '') +
+          (it.summary ? '<p><b>💬 ' + esc(it.summary) + '</b></p>' : '') +
+          (it.next ? '<p><b>🚀 다음 단계까지 할 일</b></p><div class="next">' + esc(it.next) + '</div>' : '') +
+          (it.hasPdf ? '<button class="btn primary big-btn" data-pdf="' + esc(it.receipt) + '" data-title="' + esc(it.stageName) + '">📄 내 피드백 문서 보기</button>' : '') +
+          '</div>';
+      }
+      return html + '</div>';
+    }).join('');
+
+    $('lookupResult').innerHTML = tl + cards;
+    $('lookupResult').querySelectorAll('[data-pdf]').forEach(function (b) {
+      b.addEventListener('click', function () { openPdf(b.dataset.pdf, b.dataset.title); });
+    });
+    if (r.items.some(function (i) { return i.status === 'arrived'; })) $('mascot').classList.add('happy');
+  }
+
+  // ───────── PDF 보기 (pdf.js) ─────────
+  var pdfjsReady = null;
+  function loadPdfJs() {
+    if (pdfjsReady) return pdfjsReady;
+    pdfjsReady = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = PDFJS + 'pdf.min.js';
+      s.onload = function () {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js';
+        resolve(window.pdfjsLib);
+      };
+      s.onerror = function () { pdfjsReady = null; reject(new Error('문서 보기 도구를 불러오지 못했습니다.')); };
+      document.head.appendChild(s);
+    });
+    return pdfjsReady;
+  }
+
+  function openPdf(receipt, title) {
+    loading(true, '피드백 문서를 여는 중…');
+    Promise.all([call('getFeedbackPdf', who.id, who.name, receipt), loadPdfJs()])
+      .then(function (res) {
+        var file = res[0], lib = res[1];
+        $('pdfTitle').textContent = (title || '') + ' 피드백';
+        $('pdfDownload').href = 'data:application/pdf;base64,' + file.data;
+        $('pdfDownload').setAttribute('download', file.fileName);
+        var bin = atob(file.data), bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return lib.getDocument({ data: bytes, cMapUrl: PDFJS + 'cmaps/', cMapPacked: true }).promise;
+      })
+      .then(function (pdf) {
+        var box = $('pdfPages');
+        box.innerHTML = '';
+        $('pdfModal').hidden = false;
+        loading(false);
+        var chain = Promise.resolve();
+        for (var n = 1; n <= pdf.numPages; n++) {
+          (function (n) {
+            chain = chain.then(function () { return pdf.getPage(n); }).then(function (page) {
+              var ratio = Math.min(window.devicePixelRatio || 1, 2);
+              var width = Math.min(box.clientWidth || 800, 860);
+              var vp0 = page.getViewport({ scale: 1 });
+              var vp = page.getViewport({ scale: width / vp0.width * ratio });
+              var c = document.createElement('canvas');
+              c.width = vp.width; c.height = vp.height;
+              box.appendChild(c);
+              return page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+            });
+          })(n);
+        }
+        return chain;
+      })
+      .catch(function (e) {
+        loading(false);
+        alert(e.message);
+      });
+  }
+  $('pdfClose').addEventListener('click', function () { $('pdfModal').hidden = true; $('pdfPages').innerHTML = ''; });
+
+  // ───────── 색종이 ─────────
+  function confetti() {
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var cv = $('confetti'), ctx = cv.getContext('2d');
+    cv.width = innerWidth; cv.height = innerHeight;
+    var colors = ['#FFD93B', '#2F5DA8', '#ffffff', '#222222', '#ff8fab'];
+    var parts = [];
+    for (var i = 0; i < 140; i++) {
+      parts.push({ x: cv.width / 2, y: cv.height / 3, vx: (Math.random() - .5) * 14, vy: Math.random() * -12 - 4,
+        s: Math.random() * 8 + 4, c: colors[i % colors.length], r: Math.random() * 6, vr: (Math.random() - .5) * .3 });
+    }
+    var t = 0;
+    (function step() {
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      parts.forEach(function (p) {
+        p.vy += .35; p.x += p.vx; p.y += p.vy; p.r += p.vr;
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r);
+        ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2); ctx.restore();
+      });
+      if (++t < 130) requestAnimationFrame(step); else ctx.clearRect(0, 0, cv.width, cv.height);
+    })();
+  }
+})();
+</script>

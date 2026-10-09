@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+  <?!= include('Stylesheet'); ?>
+</head>
+<body>
+  <header class="top">
+    <div class="mascot" id="mascot" aria-hidden="true">
+      <svg viewBox="0 0 120 120" width="72" height="72">
+        <path d="M30 95 C10 60 30 20 70 12 C62 30 60 60 82 92 Z" fill="#FFD93B" stroke="#222" stroke-width="5" stroke-linejoin="round"/>
+        <path d="M70 12 l6 -8" stroke="#6b4a1e" stroke-width="7" stroke-linecap="round"/>
+        <circle cx="45" cy="55" r="11" fill="#fff" stroke="#222" stroke-width="4"/>
+        <circle cx="66" cy="58" r="11" fill="#fff" stroke="#222" stroke-width="4"/>
+        <path d="M34 52 h43" stroke="#2F5DA8" stroke-width="6" stroke-linecap="round"/>
+        <circle class="eye" cx="46" cy="57" r="4" fill="#222"/>
+        <circle class="eye" cx="66" cy="60" r="4" fill="#222"/>
+        <path class="mouth" d="M46 76 q10 8 20 0" stroke="#222" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <circle cx="96" cy="86" r="13" fill="none" stroke="#2F5DA8" stroke-width="5"/>
+        <path d="M86 96 l-12 12" stroke="#2F5DA8" stroke-width="6" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <div>
+      <div class="course" id="course">불러오는 중…</div>
+      <h1 id="title">과제 제출·피드백</h1>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab on" data-tab="submit" role="tab">📮 과제 제출</button>
+    <button class="tab" data-tab="check" role="tab">📬 내 피드백</button>
+  </nav>
+
+  <main>
+    <!-- 제출 -->
+    <section id="tab-submit" class="panel">
+      <div class="card guide" id="guide"></div>
+
+      <div class="card">
+        <h2>1. 어느 단계를 내나요?</h2>
+        <div class="stages" id="stageList"></div>
+        <p class="stage-desc" id="stageDesc"></p>
+      </div>
+
+      <form class="card" id="form" autocomplete="off" novalidate>
+        <h2>2. 나를 알려 주세요</h2>
+        <div class="row2">
+          <label>학번<input id="sid" inputmode="numeric" maxlength="6" placeholder="예: 1101" required></label>
+          <label>이름<input id="sname" maxlength="20" placeholder="예: 홍길동" required></label>
+        </div>
+        <label>이메일 <span class="opt">(선택 · 제출 완료 메일을 받을 주소)</span>
+          <input id="semail" type="email" placeholder="you@school.kr">
+        </label>
+
+        <h2>3. 과정을 기록해 주세요</h2>
+        <label>이번 단계에서 한 일 <span class="req">필수</span>
+          <textarea id="did" rows="4" maxlength="3000" placeholder="예: 동조 실험 자료를 3개 찾아 읽고, 탐구 질문을 '또래 압력이 시험 공부 시간에 영향을 줄까?'로 좁혔다."></textarea>
+          <span class="count" data-for="did"></span>
+        </label>
+        <label>어려웠던 점 · 선생님께 묻고 싶은 것 <span class="opt">(선택)</span>
+          <textarea id="question" rows="3" maxlength="2000" placeholder="예: 설문으로 조사해도 실험이라고 할 수 있는지 궁금해요."></textarea>
+          <span class="count" data-for="question"></span>
+        </label>
+
+        <div id="bodyWrap">
+          <h2>4. 제출물</h2>
+          <label id="bodyLabel">본문 <span class="opt" id="bodyOpt">(파일 대신 바로 적어도 돼요)</span>
+            <textarea id="body" rows="8" maxlength="20000"></textarea>
+            <span class="count" data-for="body"></span>
+          </label>
+          <div id="fileWrap">
+            <div class="drop" id="drop" tabindex="0">
+              <input type="file" id="file" hidden>
+              <div class="drop-in">
+                <div class="big">📎</div>
+                <div><b>파일을 끌어다 놓거나 눌러서 고르세요</b></div>
+                <div class="hint" id="fileHint"></div>
+              </div>
+            </div>
+            <div class="picked" id="picked" hidden></div>
+          </div>
+        </div>
+
+        <details class="rubric-peek" id="rubricPeek">
+          <summary>📏 최종 평가 기준(루브릭) 미리 보기</summary>
+          <div id="rubricBody"></div>
+        </details>
+
+        <div class="err" id="formErr" role="alert"></div>
+        <button type="submit" class="btn primary big-btn" id="btnReview">입력한 내용 확인하기</button>
+        <p class="tiny">작성 중인 내용은 이 기기에 임시 저장됩니다.</p>
+      </form>
+    </section>
+
+    <!-- 확인 -->
+    <section id="tab-check" class="panel" hidden>
+      <form class="card" id="lookupForm" autocomplete="off">
+        <h2>내 제출 기록과 피드백</h2>
+        <div class="row2">
+          <label>학번<input id="lid" inputmode="numeric" maxlength="6" required></label>
+          <label>이름<input id="lname" maxlength="20" required></label>
+        </div>
+        <div class="err" id="lookupErr" role="alert"></div>
+        <button class="btn primary big-btn" type="submit">확인하기</button>
+      </form>
+      <div id="lookupResult"></div>
+    </section>
+  </main>
+
+  <!-- 확인 창 -->
+  <div class="modal" id="confirmModal" hidden>
+    <div class="sheet">
+      <h2>이대로 낼까요?</h2>
+      <div id="confirmBody"></div>
+      <div class="btns">
+        <button class="btn" id="btnBack">고칠래요</button>
+        <button class="btn primary" id="btnSend">제출하기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 완료 -->
+  <div class="modal" id="doneModal" hidden>
+    <div class="sheet center">
+      <div class="done-icon">🎉</div>
+      <h2>제출이 완료되었습니다</h2>
+      <p>선생님이 곧 읽어 볼 거예요.</p>
+      <div id="doneBody"></div>
+      <div class="btns"><button class="btn primary" id="btnDone">확인</button></div>
+    </div>
+  </div>
+
+  <!-- PDF 보기 -->
+  <div class="modal" id="pdfModal" hidden>
+    <div class="sheet wide">
+      <div class="pdf-bar">
+        <b id="pdfTitle">피드백 문서</b>
+        <span class="grow"></span>
+        <a class="btn small" id="pdfDownload" download>저장</a>
+        <button class="btn small" id="pdfClose">닫기</button>
+      </div>
+      <div id="pdfPages" class="pdf-pages"></div>
+    </div>
+  </div>
+
+  <div class="loading" id="loading" hidden>
+    <div class="bounce">🍌</div>
+    <div id="loadingText">잠시만요…</div>
+  </div>
+  <canvas id="confetti" aria-hidden="true"></canvas>
+
+  <footer>© shiny-peace</footer>
+  <?!= include('JavaScript'); ?>
+</body>
+</html>
