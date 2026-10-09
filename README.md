@@ -65,7 +65,16 @@ gws auth login -s script,sheets,drive      # Apps Script 권한을 꼭 함께 �
 - [Apps Script 설정](https://script.google.com/home/usersettings)에서 **Google Apps Script API**를 켭니다.
 - gcloud 없이 준비하려면 [gws 수동 OAuth 설정](https://github.com/googleworkspace/cli#manual-oauth-setup-google-cloud-console)을 따릅니다. 이때 Cloud 프로젝트에서 Apps Script API, Sheets API, Drive API를 사용으로 바꿉니다.
 
-그다음 실행합니다.
+그다음 실행합니다. **윈도우(cmd, PowerShell)·맥 모두 같은 명령**입니다.
+
+```bash
+node scripts/deploy-gws.mjs check                      # 로그인·권한·API가 준비됐는지 점검
+node scripts/deploy-gws.mjs init "인간과 심리 1차 과제"   # 시트 + 스크립트 + 코드 + 첫 배포
+node scripts/deploy-gws.mjs deploy "피드백 화면 수정"      # 코드를 고친 뒤: 같은 주소로 새 버전 배포
+node scripts/deploy-gws.mjs status                     # 저장된 ID와 주소 보기
+```
+
+맥·리눅스에서는 같은 일을 하는 `./scripts/deploy-gws.sh`도 쓸 수 있습니다.
 
 ```bash
 ./scripts/deploy-gws.sh check                      # 로그인·권한·API가 준비됐는지 점검
