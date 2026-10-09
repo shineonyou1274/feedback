@@ -20,6 +20,11 @@ const STATE = join(ROOT, '.gws-deploy.json');
 const LOGIN = 'gws auth login -s script,sheets,drive';
 
 const red = s => console.error(`\x1b[31m${s}\x1b[0m`);
+
+// 윈도우 콘솔은 출력이 비동기라 process.exit()를 바로 부르면 안내문이 잘린다.
+// 그래서 예외로 빠져나와 프로그램이 스스로 끝나게 한다.
+class Stop extends Error {}
+const stop = () => { process.exitCode = 1; throw new Stop(); };
 const green = s => console.log(`\x1b[32m${s}\x1b[0m`);
 const step = s => console.log(`\n▶ ${s}`);
 
@@ -79,7 +84,7 @@ function explain(msg) {
   } else {
     red('위 메시지를 그대로 복사해 보내 주세요.');
   }
-  process.exit(1);
+  stop();
 }
 
 // ───────── 명령 ─────────
@@ -89,7 +94,7 @@ function check() {
   if (!GWS) {
     red('✗ gws를 찾지 못했습니다. 아래로 설치한 뒤 다시 실행하세요.');
     red('  npm install -g @googleworkspace/cli');
-    process.exit(1);
+    stop();
   }
   green(`✓ ${gwsRaw(['--version']).out.split('\n')[0]}`);
 
@@ -103,12 +108,14 @@ function check() {
       red('    없으면: https://github.com/googleworkspace/cli#manual-oauth-setup-google-cloud-console');
     }
     red(`  그다음:  ${LOGIN}`);
-    process.exit(1);
+    stop();
   }
   green(`✓ 로그인됨 (${st.credential_source})`);
 
+  console.log('  Drive API 확인 중…');
   gws(['drive', 'files', 'list', '--params', JSON.stringify({ pageSize: 1 })]);
   green('✓ Drive API');
+  console.log('  Apps Script API 확인 중…');
   const probe = gwsRaw(['script', 'projects', 'get', '--params', JSON.stringify({ scriptId: '__check__' })]);
   const p = probe.err + probe.out;
   if (/not found|Requested entity|Invalid|"code":\s*400|"code":\s*404/i.test(p)) green('✓ Apps Script API');
@@ -123,8 +130,8 @@ function init(args) {
     if (args[i] === '--sheet') sheet = args[++i] || '';
     else title = args[i];
   }
-  if (!existsSync(SRC)) { red(`src 폴더가 없습니다: ${SRC}`); process.exit(1); }
-  if (!GWS) { red('gws를 찾지 못했습니다. 먼저 check를 실행하세요.'); process.exit(1); }
+  if (!existsSync(SRC)) { red(`src 폴더가 없습니다: ${SRC}`); stop(); }
+  if (!GWS) { red('gws를 찾지 못했습니다. 먼저 check를 실행하세요.'); stop(); }
 
   let st = loadState();
   let ssid = sheet || st.spreadsheetId;
@@ -165,7 +172,7 @@ function init(args) {
 
 function push() {
   const sid = loadState().scriptId;
-  if (!sid) { red('scriptId가 없습니다. 먼저 init을 실행하세요.'); process.exit(1); }
+  if (!sid) { red('scriptId가 없습니다. 먼저 init을 실행하세요.'); stop(); }
   step(`코드 올리기 (src → ${sid})`);
   gws(['script', '+push', '--script', sid, '--dir', SRC]);
   green('  올렸습니다.');
@@ -201,6 +208,7 @@ function status() {
 }
 
 const [cmd, ...rest] = process.argv.slice(2);
+try {
 switch (cmd) {
   case 'check': check(); break;
   case 'init': init(rest); break;
@@ -209,5 +217,12 @@ switch (cmd) {
   case 'status': status(); break;
   default:
     console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 11).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
-    process.exit(1);
+    stop();
+}
+} catch (e) {
+  if (!(e instanceof Stop)) {
+    red('예상하지 못한 오류입니다. 아래 내용을 복사해 보내 주세요.');
+    console.error(e && e.stack ? e.stack : String(e));
+    process.exitCode = 1;
+  }
 }
