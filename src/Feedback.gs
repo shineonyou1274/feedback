@@ -82,8 +82,10 @@ function buildPdf_(row, ctx) {
     body.setMarginTop(48).setMarginBottom(48).setMarginLeft(56).setMarginRight(56);
     body.clear();
 
-    const t = body.getParagraphs()[0];
-    t.setText(`${s[KEY.COURSE]} · ${s[KEY.TITLE]}`).setHeading(DocumentApp.ParagraphHeading.TITLE);
+    // Paragraph.setText()는 값을 돌려주지 않으므로 이어 쓰지 않는다.
+    const t = body.getParagraphs()[0] || body.appendParagraph('');
+    t.setText(`${s[KEY.COURSE]} · ${s[KEY.TITLE]}`);
+    t.setHeading(DocumentApp.ParagraphHeading.TITLE);
     t.editAsText().setFontSize(22).setBold(true).setForegroundColor(C.ink);
     const sub1 = body.appendParagraph(`${row['단계명']} 단계 피드백${s[KEY.STANDARD] ? '  |  ' + s[KEY.STANDARD] : ''}`);
     sub1.editAsText().setFontSize(12).setForegroundColor(C.denim).setBold(true);
