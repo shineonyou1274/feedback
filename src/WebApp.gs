@@ -127,6 +127,7 @@ function submitAssignment(payload) {
     sh.appendRow(line);
 
     addFeedbackRow_({ receipt, id, name, stage, now, fileName, fileUrl, did, question, attempt });
+    if (!me) addToRoster_(id, name, email, roster);
     SpreadsheetApp.flush();
   } finally {
     lock.releaseLock();
@@ -178,6 +179,23 @@ function addFeedbackRow_(o) {
     sh.getRange(row, map['제출파일']).setFormula(`=HYPERLINK("${o.fileUrl}","${String(o.fileName).replace(/"/g, '')}")`);
   }
   if (map['공개']) sh.getRange(row, map['공개']).insertCheckboxes();
+  if (map['상태']) {
+    sh.getRange(row, map['상태']).setDataValidation(
+      SpreadsheetApp.newDataValidation().requireValueInList(Object.values(STATUS), true).build());
+  }
+}
+
+/** 명단에 없는 학생이 제출하면 명단에 자동으로 넣는다 (미제출 확인과 메일 발송에 쓰인다). */
+function addToRoster_(id, name, email, roster) {
+  if ((roster || getRoster_()).some(r => r.id === id)) return;
+  let sh = ss_().getSheetByName(SHEET.ROSTER);
+  if (!sh) {
+    sh = ss_().insertSheet(SHEET.ROSTER);
+    sh.getRange(1, 1, 1, 3).setValues([['학번', '이름', '이메일']]);
+  }
+  const row = lastDataRow_(sh, 1) + 1;
+  sh.getRange(row, 1).setNumberFormat('@');
+  sh.getRange(row, 1, 1, 3).setValues([[id, name, email || '']]);
 }
 
 function markSubmitMailed_(receipt) {

@@ -5,6 +5,9 @@
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('📮 과제 피드백')
+    .addItem('🖥 웹 관리 화면 열기', 'menuOpenAdmin')
+    .addItem('🎒 학생 화면 열기', 'menuOpenStudent')
+    .addSeparator()
     .addItem('① 처음 설정 (시트·폴더 만들기)', 'setupAll')
     .addItem('루브릭 바꾼 뒤: 피드백 시트 점수 열 맞추기', 'syncFeedbackColumns')
     .addItem('피드백 시트 정리 (빈 줄 지우기·빠진 제출 채우기)', 'menuRepairFeedback')
@@ -24,6 +27,30 @@ function onOpen() {
     .addItem('⚙️ AI API 키 등록', 'menuSetApiKey')
     .addItem('⚙️ 매일 아침 도착 메일 자동 발송 켜기', 'installDailyTrigger')
     .addToUi();
+  // 예전 버전에서 맨 아래로 밀린 피드백 행을 올리고, 빠진 제출을 채운다.
+  try { if (ss_().getSheetByName(SHEET.FEEDBACK)) repairFeedbackSheet_(); } catch (e) { /* 처음 설정 전 */ }
+}
+
+function menuOpenAdmin() { openUrlDialog_('?page=admin', '웹 관리 화면'); }
+function menuOpenStudent() { openUrlDialog_('', '학생 화면'); }
+
+/** 새 탭으로 웹앱을 연다. 팝업이 막히면 누를 수 있는 링크를 보여 준다. */
+function openUrlDialog_(suffix, label) {
+  uiOnly_();
+  const base = webAppUrl_();
+  if (!base) {
+    SpreadsheetApp.getUi().alert('웹앱 주소가 없습니다. 먼저 웹 앱으로 배포하세요.');
+    return;
+  }
+  const url = base + suffix;
+  const html = HtmlService.createHtmlOutput(
+    `<div style="font-family:sans-serif;padding:8px">
+       <p>${escHtml_(label)}을(를) 새 탭에서 엽니다.</p>
+       <p><a href="${escHtml_(url)}" target="_blank" style="font-size:16px;font-weight:bold">👉 열리지 않으면 여기를 누르세요</a></p>
+     </div>
+     <script>window.open(${JSON.stringify(url)}, '_blank'); setTimeout(function(){ google.script.host.close(); }, 4000);</script>`)
+    .setWidth(360).setHeight(140);
+  SpreadsheetApp.getUi().showModelessDialog(html, label);
 }
 
 // ───────────────────────── 처음 설정 ─────────────────────────
@@ -36,7 +63,7 @@ function setupAll() {
   ensureSheet_(SHEET.SETTINGS, ['키', '값', '설명'], defaultSettings_());
   ensureSheet_(SHEET.STAGES, ['단계ID', '단계명', '학생 안내', '피드백 초점', '제출 방식', '마감일시', '열림', '마감 후 제출 허용'], defaultStages_());
   ensureSheet_(SHEET.RUBRIC, ['평가 항목', '배점', '상', '중', '하'], defaultRubric_());
-  ensureSheet_(SHEET.ROSTER, ['학번', '이름', '이메일'], [['1101', '홍길동', '']]);
+  ensureSheet_(SHEET.ROSTER, ['학번', '이름', '이메일'], []);
   ensureSheet_(SHEET.SUBMIT, SUBMIT_HEADERS, []);
   ensureSheet_(SHEET.FEEDBACK, FB_HEAD.concat(FB_TAIL), []);
   syncFeedbackColumns(true);

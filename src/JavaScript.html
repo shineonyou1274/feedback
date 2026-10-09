@@ -28,11 +28,11 @@
   function store(fn) { try { return fn(); } catch (e) { return null; } }
 
   // ───────── 탭 ─────────
-  document.querySelectorAll('.tab').forEach(function (b) {
+  document.querySelectorAll('.tab[data-tab]').forEach(function (b) {
     b.addEventListener('click', function () { showTab(b.dataset.tab); });
   });
   function showTab(name) {
-    document.querySelectorAll('.tab').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === name); });
+    document.querySelectorAll('.tab[data-tab]').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === name); });
     $('tab-submit').hidden = name !== 'submit';
     $('tab-check').hidden = name !== 'check';
   }

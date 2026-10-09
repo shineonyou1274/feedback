@@ -221,14 +221,28 @@ function aiContext_() {
   };
 }
 
+/**
+ * 지금 고른 행들을 피드백 시트의 행 번호로 돌려준다.
+ * '피드백' 시트뿐 아니라 '제출' 시트에서 학생 행을 골라도 된다 (접수번호로 찾아 준다).
+ */
 function selectedFeedbackRows_() {
+  repairFeedbackSheet_(); // 빠진 피드백 행부터 채운다.
   const sh = SpreadsheetApp.getActiveSheet();
-  if (sh.getName() !== SHEET.FEEDBACK) throw new Error("'피드백' 시트에서 학생 행을 고른 뒤 실행하세요.");
-  const rows = new Set();
+  const name = sh.getName();
+  if (name !== SHEET.FEEDBACK && name !== SHEET.SUBMIT) {
+    throw new Error("'피드백' 또는 '제출' 시트에서 학생 행(여러 줄도 됨)을 고른 뒤 다시 실행하세요.");
+  }
+  const picked = new Set();
   sh.getActiveRangeList().getRanges().forEach(rg => {
-    for (let r = rg.getRow(); r < rg.getRow() + rg.getNumRows(); r++) if (r >= 2) rows.add(r);
+    for (let r = rg.getRow(); r < rg.getRow() + rg.getNumRows(); r++) if (r >= 2) picked.add(r);
   });
-  return Array.from(rows);
+  if (name === SHEET.FEEDBACK) return Array.from(picked);
+
+  const subMap = headerMap_(sh);
+  const receipts = new Set(Array.from(picked)
+    .map(r => String(sh.getRange(r, subMap['접수번호']).getValue()))
+    .filter(Boolean));
+  return readRows_(sheet_(SHEET.FEEDBACK)).filter(r => receipts.has(String(r['접수번호']))).map(r => r._row);
 }
 
 function menuDraftSelected() {
